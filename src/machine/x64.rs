@@ -1,48 +1,93 @@
 use keystone::*;
 use std::collections::HashMap;
 use unicorn::{Cpu, CpuX86};
+use capstone::prelude::*;
 
 use super::interface::Machine;
 use maplit::hashmap;
+use std::convert::TryFrom;
+
+use crate::hexprint::Printer;
+use crate::hexprint::BorderStyle;
+
+const CODE_ADDR: u64 = 0x00400000;
+const CODE_SIZE: u64 = 0x00100000;
+const DATA_ADDR: u64 = CODE_ADDR + CODE_SIZE;
+const DATA_SIZE: u64 = 0x00100000;
+const STACK_ADDR: u64 = DATA_ADDR + DATA_SIZE;
+const STACK_SIZE: u64 = 0x00100000;
+const STACK_TOP:  u64 = STACK_ADDR + STACK_SIZE;
+const WORD_SIZE: usize = 8;
+
 
 pub fn new() -> Machine<'static> {
     let reg_map = init_register_map();
     let reg_names = sorted_reg_names();
     let cpu = unicorn_vm();
     let previous_reg_val_map = previous_reg_value_map(&cpu);
+    let capstone = capstone_engine().unwrap();
+    let keystone = keystone_engine().unwrap();
 
     Machine {
         register_map: reg_map,
-        keystone: keystone_engine(),
+        keystone,
+        capstone,
         emu: cpu,
         sorted_reg_names: reg_names,
-        byte_size: 8,
+        word_size: WORD_SIZE,
         previous_reg_value: previous_reg_val_map,
         sp: unicorn::RegisterX86::RSP,
+        ip: unicorn::RegisterX86::RIP,
+        previous_inst_addr: vec![CODE_ADDR],
+        code_addr: CODE_ADDR,
+        code_size: CODE_SIZE,
+        data_addr: DATA_ADDR,
+        data_size: DATA_SIZE,
+        stack_top: STACK_TOP,
+        printer: Printer::new(true, BorderStyle::Unicode, false),
     }
 }
 
 fn unicorn_vm() -> CpuX86 {
     let cpu = CpuX86::new(unicorn::Mode::MODE_64).expect("failed to instantiate emulator");
-    cpu.reg_write(unicorn::RegisterX86::RSP, 0x01300000)
-        .expect("failed to write to rsp");
-    cpu.reg_write(unicorn::RegisterX86::RBP, 0x10000000)
-        .expect("failed to write to rbp");
-    cpu.mem_map(0x0000, 0x20000000, unicorn::Protection::ALL)
-        .expect("failed to map memory");
+    cpu.reg_write(unicorn::RegisterX86::RSP, STACK_TOP)
+        .expect("failed to write rsp");
+    cpu.reg_write(unicorn::RegisterX86::RBP, STACK_ADDR)
+        .expect("failed to write rbp");
+    cpu.reg_write(unicorn::RegisterX86::RDI, DATA_ADDR)
+        .expect("failed to write rdi");
+    cpu.reg_write(unicorn::RegisterX86::RSI, DATA_ADDR)
+        .expect("failed to write rsi");
+    cpu.reg_write(unicorn::RegisterX86::RIP, CODE_ADDR)
+        .expect("failed to write rip");
+
+    cpu.mem_map(CODE_ADDR, usize::try_from(CODE_SIZE).unwrap(), unicorn::Protection::ALL)
+        .expect("failed to map code segment");
+    cpu.mem_map(DATA_ADDR, usize::try_from(DATA_SIZE).unwrap(), unicorn::Protection::ALL)
+        .expect("failed to map data segment");
+    cpu.mem_map(STACK_ADDR, usize::try_from(STACK_SIZE).unwrap(), unicorn::Protection::ALL)
+        .expect("failed to map stack segment");
 
     cpu
 }
 
-fn keystone_engine() -> keystone::Keystone {
-    let engine = Keystone::new(Arch::X86, keystone::keystone_const::MODE_64)
-        .expect("Could not initialize Keystone engine");
+fn keystone_engine() -> Result<keystone::Keystone,keystone::Error> {
+    let engine = Keystone::new(Arch::X86, Mode::LITTLE_ENDIAN | Mode::MODE_64)?;
 
-    engine
-        .option(OptionType::SYNTAX, keystone::OPT_SYNTAX_INTEL)
-        .expect("Could not set option to nasm syntax");
+    engine.option(OptionType::SYNTAX, OptionValue::SYNTAX_NASM)?;
 
-    engine
+    Ok(engine)
+}
+
+fn capstone_engine() -> Result<Capstone,capstone::Error> {
+    let caps = Capstone::new()
+        .x86()
+        .mode(arch::x86::ArchMode::Mode64)
+        .syntax(arch::x86::ArchSyntax::Intel)
+        .detail(false)
+        .build()?;
+
+    Ok(caps)
 }
 
 fn sorted_reg_names() -> Vec<&'static str> {
