@@ -1,9 +1,6 @@
-extern crate capstone;
-
 use ansi_term::Colour::{Blue, Purple, Yellow};
 use keystone::{AsmResult, Error};
 use std::collections::HashMap;
-use unicorn::Cpu;
 use std::convert::TryFrom;
 use capstone::prelude::*;
 
@@ -14,12 +11,13 @@ pub struct Machine<'a> {
     pub register_map: HashMap<&'a str, unicorn::RegisterX86>,
     pub keystone: keystone::Keystone,
     pub capstone: Capstone,
-    pub emu: unicorn::CpuX86,
+    pub unicorn: unicorn::Unicorn,
     pub sorted_reg_names: Vec<&'a str>,
     pub word_size: usize,
     pub previous_reg_value: HashMap<&'a str, u64>,
     pub sp: unicorn::RegisterX86,
     pub ip: unicorn::RegisterX86,
+    pub flags: unicorn::RegisterX86,
     pub previous_inst_addr: Vec<u64>,
     pub code_addr: u64,
     pub code_size: u64,
@@ -27,24 +25,42 @@ pub struct Machine<'a> {
     pub data_size: u64,
     pub stack_top: u64,
     pub printer: Printer,
+    pub context: Option<unicorn::Context>,
 }
 
 impl<'a> Machine<'a> {
-    pub fn print_version(&self) {
-        let (major, minor) = unicorn::unicorn_version();
-        println!("unicorn version: {}.{}", major, minor);
 
-        let (major, minor) = keystone::bindings_version();
-        println!("keystone version: {}.{}", major, minor);
+    pub unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
+        ::std::slice::from_raw_parts(
+            (p as *const T) as *const u8,
+            ::std::mem::size_of::<T>(),
+        )
+    }
+
+    pub fn save_context(&self) {
+        if let Some(context) = &self.context {
+            let bytes: &[u8] = unsafe { Machine::<'a>::any_as_u8_slice(&context) };
+            println!("{:?}", ::std::mem::size_of::<unicorn::Context>());
+            println!("{:?}", bytes.len());
+            println!("{:?}", bytes);
+        }
+    }
+
+    pub fn print_version(&self) {
+        //let (major, minor) = unicorn::unicorn_version();
+        //println!("unicorn version: {}.{}", major, minor);
+
+        //let (major, minor) = keystone::bindings_version();
+        //println!("keystone version: {}.{}", major, minor);
     }
 
     pub fn print_register(&mut self) {
+        let emu = self.unicorn.borrow();
         println!(
             "{}",
             Yellow.paint("----------------- cpu context -----------------")
         );
 
-        let mut current_reg_val_map = HashMap::new();
         for &reg_name in &self.sorted_reg_names {
             if reg_name == "end" {
                 println!();
@@ -52,14 +68,7 @@ impl<'a> Machine<'a> {
             }
 
             let &uc_reg = self.register_map.get(reg_name).unwrap();
-
-            // pad reg_name to 3 bytes
-            let mut padded_reg_name = reg_name.to_string();
-            while padded_reg_name.len() < 3 {
-                padded_reg_name.push(' ');
-            }
-
-            let reg_val = self.emu.reg_read(uc_reg).unwrap();
+            let reg_val = emu.reg_read(uc_reg as i32).unwrap();
             let previous_reg_val = *self.previous_reg_value.get(reg_name).unwrap();
             let reg_val_str: String;
             match self.word_size {
@@ -69,32 +78,29 @@ impl<'a> Machine<'a> {
             }
 
             if previous_reg_val != reg_val {
-                print!("{} : {} ", padded_reg_name, Blue.paint(reg_val_str));
+                print!("{:3} : {} ", reg_name, Blue.paint(reg_val_str));
+                self.previous_reg_value.insert(reg_name, reg_val);
             } else {
-                print!("{} : {} ", padded_reg_name, reg_val_str);
-            }
-            current_reg_val_map.insert(reg_name, reg_val);
-            if reg_name == "flags" {
-                self.print_flags(reg_val);
+                print!("{:3} : {} ", reg_name, reg_val_str);
             }
         }
-        self.previous_reg_value = current_reg_val_map;
     }
 
     pub fn asm(&self, str: String, address: u64) -> Result<AsmResult, Error> {
         return self.keystone.asm(str, address);
     }
 
-    pub fn execute_instruction(&mut self, byte_arr: Vec<u8>) -> Result<u64,unicorn::unicorn_const::Error> {
-        let cur_ip_val = self.emu.reg_read(self.ip).unwrap();
-        let _ = self.emu.mem_write(cur_ip_val, &byte_arr);
-        let result = self.emu.emu_start(
+    pub fn execute_instruction(&mut self, byte_arr: Vec<u8>) -> Result<u64,unicorn::unicorn_const::uc_error> {
+        let mut emu = self.unicorn.borrow();
+        let cur_ip_val = emu.reg_read(self.ip as i32).unwrap();
+        let _ = emu.mem_write(cur_ip_val, &byte_arr);
+        let result = emu.emu_start(
             cur_ip_val,
             cur_ip_val + u64::try_from(byte_arr.len()).unwrap(),
-            10 * unicorn::SECOND_SCALE,
+            10 * unicorn::unicorn_const::SECOND_SCALE,
             1000,
         );
-        let new_ip_val = self.emu.reg_read(self.ip).unwrap();
+        let new_ip_val = emu.reg_read(self.ip as i32).unwrap();
         self.previous_inst_addr.push(new_ip_val);
 
         match result {
@@ -103,7 +109,8 @@ impl<'a> Machine<'a> {
         }
     }
 
-    pub fn print_code(&self) {
+    pub fn print_code(&mut self) {
+        let emu = self.unicorn.borrow();
         println!(
             "{}",
             Purple.paint("----------------- code segment -----------------")
@@ -115,7 +122,7 @@ impl<'a> Machine<'a> {
             let e_addr = self.previous_inst_addr.last().unwrap();
             let len = e_addr - s_addr;
 
-            if let Ok(v) = self.emu.mem_read_as_vec(*s_addr, usize::try_from(len).unwrap()) {
+            if let Ok(v) = emu.mem_read_as_vec(*s_addr, usize::try_from(len).unwrap()) {
                 //let mut bytes: &[u8];
                 let insns = self
                                 .capstone
@@ -134,9 +141,9 @@ impl<'a> Machine<'a> {
     }
 
     pub fn init_cache(&mut self) {
-        let mem_data = self
-            .emu
-            .mem_read_as_vec(self.data_addr as u64, self.word_size * 4 * 8)
+        let emu = self.unicorn.borrow();
+        let mem_data = emu
+            .mem_read_as_vec(self.data_addr as u64, 5 * 16)
             .unwrap();
 
         self.printer.display_offset(self.data_addr);
@@ -144,13 +151,13 @@ impl<'a> Machine<'a> {
     }
 
     pub fn print_data(&mut self) {
+        let emu = self.unicorn.borrow();
         println!(
             "{}",
             Purple.paint("----------------- data segment -----------------")
         );
-        let mem_data = self
-            .emu
-            .mem_read_as_vec(self.data_addr as u64, self.word_size * 4 * 8)
+        let mem_data = emu
+            .mem_read_as_vec(self.data_addr as u64, 5 * 16)
             .unwrap();
 
         self.printer.display_offset(self.data_addr);
@@ -159,16 +166,15 @@ impl<'a> Machine<'a> {
     }
 
     pub fn print_stack(&mut self) {
+        let emu = self.unicorn.borrow();
         println!(
             "{}",
             Purple.paint("----------------- stack segment -----------------")
         );
-        //let cur_sp_val = self.emu.reg_read(self.sp).unwrap();
 
         let start_address = self.stack_top - u64::try_from(self.word_size).unwrap() * 4 * 8;
-        let mem_data = self
-            .emu
-            .mem_read_as_vec(start_address as u64, self.word_size * 4 * 8)
+        let mem_data = emu
+            .mem_read_as_vec(start_address as u64, 5 * 16)
             .unwrap();
 
         self.printer.display_offset(start_address);
@@ -176,7 +182,8 @@ impl<'a> Machine<'a> {
         self.printer.reset();
     }
 
-    fn print_flags(&self, flag_val: u64) {
+    pub fn print_flags(&mut self) {
+        let emu = self.unicorn.borrow();
         let flag_bits = vec![
             ('C', 0),
             ('P', 2),
@@ -187,7 +194,8 @@ impl<'a> Machine<'a> {
             ('O', 11),
         ];
 
-        print!("[ ");
+        let flag_val = emu.reg_read(self.flags as i32).unwrap();
+        print!("FLAGS 0x{:08x} [ ", flag_val);
         for flag_bit in flag_bits {
             let flag_val = (flag_val >> flag_bit.1) & 1;
             if flag_val == 1 {

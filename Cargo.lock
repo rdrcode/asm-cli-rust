@@ -34,7 +34,7 @@ checksum = "cff77d8686867eceff3105329d4698d96c2391c176d5d03adc90c7389162b5b8"
 
 [[package]]
 name = "asm-cli-rust"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ansi_term",
  "capstone",
@@ -324,19 +324,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d515b1f41455adea1313a4a2ac8a8a477634fbae63cc6100e3aebb207ce61558"
 
 [[package]]
-name = "libunicorn-sys"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af5b000b833bfe0aebed3ac6fd18cec9e657deb372540f82e2d74da164253a6b"
-dependencies = [
- "bitflags",
- "build-helper",
- "libc",
- "os_type",
- "pkg-config",
-]
-
-[[package]]
 name = "log"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -378,21 +365,6 @@ checksum = "9a64b1ec5cda2586e284722486d802acf1f7dbdc623e2bfc57e65ca1cd099290"
 dependencies = [
  "autocfg 1.0.1",
 ]
-
-[[package]]
-name = "os_type"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7edc011af0ae98b7f88cf7e4a83b70a54a75d2b8cb013d6efd02e5956207e9eb"
-dependencies = [
- "regex",
-]
-
-[[package]]
-name = "pkg-config"
-version = "0.3.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "676e8eb2b1b4c9043511a9b7bea0915320d7e502b0a079fb03f9635a5252b18c"
 
 [[package]]
 name = "proc-macro2"
@@ -663,13 +635,12 @@ checksum = "8ccb82d61f80a663efe1f787a51b16b5a51e3314d6ac365b08639f52387b33f3"
 
 [[package]]
 name = "unicorn"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fbc59d3e610b68f79d11e2252fd7a4205237c23c8d5eb1fbe79c53d8faf0e16"
+version = "1.0.0"
 dependencies = [
  "bitflags",
+ "build-helper",
+ "capstone",
  "libc",
- "libunicorn-sys",
 ]
 
 [[package]]
