@@ -10,7 +10,7 @@ use maplit::hashmap;
 use crate::hexprint::Printer;
 use crate::hexprint::BorderStyle;
 use crate::machine::interrupt::InterruptX86;
-
+use crate::machine::context::Context;
 
 const CODE_ADDR:  u64 = 0x08048000;
 const CODE_SIZE:  u64 = 0x00100000;
@@ -47,8 +47,6 @@ pub fn new() -> Machine<'static> {
     cpu.mem_map(STACK_ADDR, usize::try_from(STACK_SIZE).unwrap(), Permission::ALL)
         .expect("failed to map stack segment");
 
-    let context = cpu.context_alloc().ok();
-
     let _ = cpu.add_intr_hook(hook_intr).expect("failed to add intr hook");
     let _ = cpu.add_insn_sys_hook(unicorn::InsnSysX86::SYSCALL,
                                   CODE_ADDR,
@@ -76,9 +74,66 @@ pub fn new() -> Machine<'static> {
         code_size: CODE_SIZE,
         data_addr: DATA_ADDR,
         data_size: DATA_SIZE,
-        stack_top: STACK_TOP,
+        stack_addr: STACK_ADDR,
+        stack_size: STACK_SIZE,
+       printer: Printer::new(true, BorderStyle::Unicode, false),
+    }
+}
+
+pub fn new_from_context(context: &Context) -> Machine<'static> {
+    let reg_map = init_register_map();
+    let reg_names = sorted_reg_names();
+    let mut unicorn = unicorn::Unicorn::new(Arch::X86, Mode::MODE_32)
+        .expect("failed to initialize unicorn instance");
+    let mut cpu = unicorn.borrow();
+    cpu.reg_write(unicorn::RegisterX86::ESP as i32, context.stack_addr + context.stack_size)
+        .expect("failed to write esp");
+    cpu.reg_write(unicorn::RegisterX86::EBP as i32, context.stack_addr)
+        .expect("failed to write ebp");
+    cpu.reg_write(unicorn::RegisterX86::EDI as i32, context.data_addr)
+        .expect("failed to write edi");
+    cpu.reg_write(unicorn::RegisterX86::ESI as i32, context.data_addr)
+        .expect("failed to write esi");
+    cpu.reg_write(unicorn::RegisterX86::EIP as i32, context.code_addr)
+        .expect("failed to write eip");
+
+    cpu.mem_map(context.code_addr, usize::try_from(context.code_size).unwrap(), Permission::ALL)
+        .expect("failed to map code segment");
+    cpu.mem_map(context.data_addr, usize::try_from(context.data_size).unwrap(), Permission::ALL)
+        .expect("failed to map data segment");
+    cpu.mem_map(context.stack_addr, usize::try_from(context.stack_size).unwrap(), Permission::ALL)
+        .expect("failed to map stack segment");
+
+    let _ = cpu.add_intr_hook(hook_intr).expect("failed to add intr hook");
+    let _ = cpu.add_insn_sys_hook(unicorn::InsnSysX86::SYSCALL,
+                                  context.code_addr,
+                                  context.code_addr+context.code_size-1,
+                                  hook_syscall)
+               .expect("failed to add syscall hook");
+
+    let previous_reg_val_map = previous_reg_value_map(&cpu);
+    let capstone = capstone_engine().unwrap();
+    let keystone = keystone_engine().unwrap();
+
+    Machine {
+        register_map: reg_map,
+        keystone,
+        capstone,
+        unicorn,
+        sorted_reg_names: reg_names,
+        word_size: WORD_SIZE,
+        previous_reg_value: previous_reg_val_map,
+        sp: unicorn::RegisterX86::ESP,
+        ip: unicorn::RegisterX86::EIP,
+        flags: unicorn::RegisterX86::EFLAGS,
+        previous_inst_addr: vec![CODE_ADDR],
+        code_addr: context.code_addr,
+        code_size: context.code_size,
+        data_addr: context.data_addr,
+        data_size: context.data_size,
+        stack_addr: context.stack_addr,
+        stack_size: context.stack_size,
         printer: Printer::new(true, BorderStyle::Unicode, false),
-        context,
     }
 }
 
@@ -183,8 +238,6 @@ fn previous_reg_value_map(emu: &unicorn::UnicornHandle) -> HashMap<&'static str,
         })
         .collect::<HashMap<_, _>>()
 }
-
-
 
 #[cfg(test)]
 mod tests {

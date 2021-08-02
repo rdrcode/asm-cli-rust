@@ -5,6 +5,7 @@ use std::convert::TryFrom;
 use capstone::prelude::*;
 
 use crate::hexprint::Printer;
+//use crate::machine::context::Context;
 
 
 pub struct Machine<'a> {
@@ -23,28 +24,12 @@ pub struct Machine<'a> {
     pub code_size: u64,
     pub data_addr: u64,
     pub data_size: u64,
-    pub stack_top: u64,
+    pub stack_addr: u64,
+    pub stack_size: u64,
     pub printer: Printer,
-    pub context: Option<unicorn::Context>,
 }
 
 impl<'a> Machine<'a> {
-
-    pub unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
-        ::std::slice::from_raw_parts(
-            (p as *const T) as *const u8,
-            ::std::mem::size_of::<T>(),
-        )
-    }
-
-    pub fn save_context(&self) {
-        if let Some(context) = &self.context {
-            let bytes: &[u8] = unsafe { Machine::<'a>::any_as_u8_slice(&context) };
-            println!("{:?}", ::std::mem::size_of::<unicorn::Context>());
-            println!("{:?}", bytes.len());
-            println!("{:?}", bytes);
-        }
-    }
 
     pub fn print_version(&self) {
         //let (major, minor) = unicorn::unicorn_version();
@@ -172,7 +157,7 @@ impl<'a> Machine<'a> {
             Purple.paint("----------------- stack segment -----------------")
         );
 
-        let start_address = self.stack_top - u64::try_from(self.word_size).unwrap() * 4 * 8;
+        let start_address = self.stack_addr + self.stack_size - u64::try_from(self.word_size).unwrap() * 4 * 8;
         let mem_data = emu
             .mem_read_as_vec(start_address as u64, 5 * 16)
             .unwrap();
@@ -209,4 +194,5 @@ impl<'a> Machine<'a> {
         }
         println!("]");
     }
+
 }

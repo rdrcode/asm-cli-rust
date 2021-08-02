@@ -46,8 +46,6 @@ pub fn new() -> Machine<'static> {
     cpu.mem_map(STACK_ADDR, usize::try_from(STACK_SIZE).unwrap(), Permission::ALL)
         .expect("failed to map stack segment");
 
-    let context = cpu.context_alloc().ok();
-
     let _ = cpu.add_intr_hook(hook_intr).expect("failed to add intr hook");
     let _ = cpu.add_insn_sys_hook(unicorn::InsnSysX86::SYSCALL,
                                   CODE_ADDR,
@@ -75,9 +73,9 @@ pub fn new() -> Machine<'static> {
         code_size: CODE_SIZE,
         data_addr: DATA_ADDR,
         data_size: DATA_SIZE,
-        stack_top: STACK_TOP,
+        stack_addr: STACK_ADDR,
+        stack_size: STACK_SIZE,
         printer: Printer::new(true, BorderStyle::Unicode, false),
-        context,
     }
 }
 

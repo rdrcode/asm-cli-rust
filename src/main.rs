@@ -104,7 +104,6 @@ where
             }
         }
     }
-    m.save_context();
     if rl.save_history("history.txt").is_err() {
         println!("Note: Cannot write to history file.");
     }
