@@ -5,8 +5,11 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 use serde::{Deserialize, Serialize, Serializer};
+use serde_json;
 use serde::de::{Deserializer, Visitor};
 use itertools::Itertools;
+use unicorn::unicorn_const::{uc_error, MemRegion, Permission};
+use super::interface::Machine;
 
 
 #[derive(Copy,Clone)]
@@ -43,6 +46,21 @@ where
     ordered.serialize(serializer)
 }
 
+impl Default for Context {
+    fn default() -> Context {
+        Context {
+            code_addr:   Context::CODE_ADDR,
+            code_size:   Context::CODE_SIZE,
+            data_addr:   Context::DATA_ADDR,
+            data_size:   Context::DATA_SIZE,
+            stack_addr:  Context::STACK_ADDR,
+            stack_size:  Context::STACK_SIZE,
+            regs_values: HashMap::new(),
+            memory:      HashMap::new(),
+        }
+    }
+}
+
 impl Context {
 
     const CODE_ADDR:  u64 = 0x00001000;
@@ -52,40 +70,23 @@ impl Context {
     const STACK_ADDR: u64 = Context::DATA_ADDR + Context::DATA_SIZE;
     const STACK_SIZE: u64 = 0x00001000;
 
-    pub fn new_x86_32() -> Self {
-        let regs_values: HashMap<Register, u64> = Context::regs_x86_32()
-        .iter()
-        .map(|reg| {(*reg, 0 as u64)})
-        .collect();
-
-        Context {
-            code_addr:  Context::CODE_ADDR,
-            code_size:  Context::CODE_SIZE,
-            data_addr:  Context::DATA_ADDR,
-            data_size:  Context::DATA_SIZE,
-            stack_addr: Context::STACK_ADDR,
-            stack_size: Context::STACK_SIZE,
-            regs_values,
-            memory:     HashMap::new(),
+    pub fn new() -> ContextBuilder {
+        ContextBuilder {
+            code_addr:   Context::CODE_ADDR,
+            code_size:   Context::CODE_SIZE,
+            data_addr:   Context::DATA_ADDR,
+            data_size:   Context::DATA_SIZE,
+            stack_addr:  Context::STACK_ADDR,
+            stack_size:  Context::STACK_SIZE,
+            regs_values: HashMap::new(),
+            memory:      HashMap::new(),
         }
     }
 
-    pub fn code_segment(&mut self, addr: u64, size: u64) -> &Self {
-        self.code_addr = addr;
-        self.code_size = size;
-        self
-    }
+    pub fn new_from_json(json: &str) -> serde_json::Result<Context> {
+        let context = serde_json::from_str::<Context>(json)?;
 
-    pub fn data_segment(&mut self, addr: u64, size: u64) -> &Self {
-        self.data_addr = addr;
-        self.data_size = size;
-        self
-    }
-
-    pub fn stack_segment(&mut self, addr: u64, size: u64) -> &Self {
-        self.stack_addr = addr;
-        self.stack_size = size;
-        self
+        Ok(context)
     }
 
     pub fn write_to<W: Write>(&self, f: &mut W) -> Result<usize, std::io::Error> {
@@ -144,28 +145,115 @@ impl Context {
         }
     }
 
-    pub fn save(&mut self, emu: &unicorn::UnicornHandle) {
+    pub fn save(&mut self, machine: &mut Machine) {
+        let emu = machine.unicorn.borrow();
+
         for (&reg,val) in self.regs_values.iter_mut() {
             *val = emu.reg_read(reg).unwrap();
         }
 
-        self.read_memory(emu, self.code_addr, self.code_size);
-        self.read_memory(emu, self.data_addr, self.data_size);
-        self.read_memory(emu, self.stack_addr, self.stack_size);
+        self.code_addr = machine.code_addr;
+        self.code_size = machine.code_size;
+        self.data_addr = machine.data_addr;
+        self.data_size = machine.data_size;
+        self.stack_addr = machine.stack_addr;
+        self.stack_size = machine.stack_size;
+
+        self.read_memory(&emu, self.code_addr, self.code_size);
+        self.read_memory(&emu, self.data_addr, self.data_size);
+        self.read_memory(&emu, self.stack_addr, self.stack_size);
     }
 
-    pub fn restore(&self, emu: &mut unicorn::UnicornHandle) {
+    pub fn restore(&self, machine: &mut Machine) -> Result<(),uc_error> {
+        let mut emu = machine.unicorn.borrow();
+        let mem_regions: Vec<MemRegion> = emu.mem_regions()?;
+        
+        for mem_region in mem_regions {
+            let size: usize = usize::try_from(mem_region.end-mem_region.begin+1).unwrap();
+            emu.mem_unmap(mem_region.begin, size)?; 
+        }
+
+        machine.code_addr = self.code_addr;
+        machine.code_size = self.code_size;
+        machine.data_addr = self.data_addr;
+        machine.data_size = self.data_size;
+        machine.stack_addr = self.stack_addr;
+        machine.stack_size = self.stack_size;
+
+        emu.mem_map(self.code_addr, usize::try_from(self.code_size).unwrap(), Permission::ALL)?;
+        emu.mem_map(self.data_addr, usize::try_from(self.data_size).unwrap(), Permission::ALL)?;
+        emu.mem_map(self.stack_addr, usize::try_from(self.stack_size).unwrap(), Permission::ALL)?;
+
         for (reg,val) in self.regs_values.iter() {
             println!("{:?}: {:?}", *reg, *val);
-            emu.reg_write(*reg, *val).unwrap();
+            emu.reg_write(*reg, *val)?;
         }
 
         for (addr, bytes) in &self.memory {
             println!("W: {:08x}: {:?}", *addr, bytes);
-            emu.mem_write(*addr, bytes).unwrap();
+            emu.mem_write(*addr, bytes)?;
         }
+
+        Ok(())
     }
 }
+
+
+#[derive(Debug)]
+pub struct ContextBuilder {
+    pub code_addr:   u64,
+    pub code_size:   u64,
+    pub data_addr:   u64,
+    pub data_size:   u64,
+    pub stack_addr:  u64,
+    pub stack_size:  u64,
+    pub regs_values: HashMap<Register, u64>,
+    pub memory:      HashMap<u64, Vec<u8>>,
+}
+
+impl ContextBuilder {
+
+    pub fn regs_x86_32(mut self) -> ContextBuilder {
+        self.regs_values = Context::regs_x86_32()
+                            .iter()
+                            .map(|reg| {(*reg, 0 as u64)})
+                            .collect();
+        self
+    }
+
+    pub fn code_segment(mut self, addr: u64, size: u64) -> ContextBuilder {
+        self.code_addr = addr;
+        self.code_size = size;
+        self
+    }
+
+    pub fn data_segment(mut self, addr: u64, size: u64) -> ContextBuilder {
+        self.data_addr = addr;
+        self.data_size = size;
+        self
+    }
+
+    pub fn stack_segment(mut self, addr: u64, size: u64) -> ContextBuilder {
+        self.stack_addr = addr;
+        self.stack_size = size;
+        self
+    }
+
+    pub fn build(self) -> Context {
+        Context {
+            code_addr:   self.code_addr,
+            code_size:   self.code_size,
+            data_addr:   self.data_addr,
+            data_size:   self.data_size,
+            stack_addr:  self.stack_addr,
+            stack_size:  self.stack_size,
+            regs_values: self.regs_values,
+            memory:      self.memory,
+        }
+    }
+
+}
+
 
 impl From<Register> for i32 {
     fn from(reg: Register) -> Self {
@@ -270,9 +358,12 @@ mod tests {
     use std::io::Cursor;
     use super::*;
     use crate::machine;
+    use crate::machine::interface::Machine;
     use unicorn::unicorn_const::{SECOND_SCALE};
+    use maplit::hashmap;
 
-    const CONTEXT_JSON: &str = "{\
+
+    const CONTEXT_JSON_A: &str = "{\
         \"code_addr\":4096,\
         \"code_size\":4096,\
         \"data_addr\":8192,\
@@ -295,6 +386,28 @@ mod tests {
             \"8208\":[52,18]\
         }}";
 
+    const CONTEXT_JSON_B: &str = "{\
+        \"code_addr\":65536,\
+        \"code_size\":8192,\
+        \"data_addr\":73728,\
+        \"data_size\":8192,\
+        \"stack_addr\":81920,\
+        \"stack_size\":8192,\
+        \"regs_values\":{\
+            \"EAX\":255,\
+            \"EBP\":81920,\
+            \"EBX\":4660,\
+            \"ECX\":0,\
+            \"EDI\":73728,\
+            \"EDX\":12345,\
+            \"EIP\":65553,\
+            \"ESI\":73728,\
+            \"ESP\":90112},\
+            \"memory\":{\"65536\":[176,255,102,187,52,18,102,186,57,48,102,137,23,102,137,95,16],\
+            \"73728\":[57,48],\
+            \"73744\":[52,18]\
+        }}";
+
 //        \"CS\":0,\
 //        \"DS\":0,\
 //        \"EFLAGS\":0,\
@@ -303,10 +416,7 @@ mod tests {
 //        \"GS\":0},\
 //        \"SS\":0},\
 
-    #[test]
-    fn serialize_context_x32() {
-        let mut context = Context::new_x86_32();
-        let mut machine = machine::x32::new_from_context(&context);
+    fn run_code(machine: &mut Machine) -> Result<(),uc_error> {
         let mut emu = machine.unicorn.borrow();
 
         let x86_code: Vec<u8> = vec![
@@ -316,22 +426,61 @@ mod tests {
             0x66, 0x89, 0x17,          // mov [edi],dx
             0x66, 0x89, 0x5f, 0x10,    // mov [edi+16],bx
         ];
-        assert_eq!(emu.mem_write(context.code_addr, &x86_code), Ok(()));
-        let result = emu.emu_start(
-            context.code_addr,
-            context.code_addr + (x86_code.len() as u64),
+
+        emu.mem_write(machine.code_addr, &x86_code)?;
+        emu.emu_start(
+            machine.code_addr,
+            machine.code_addr + (x86_code.len() as u64),
             10 * SECOND_SCALE,
             1000,
-        );
-        assert_eq!(result, Ok(()));
-        context.save(&emu);
+        )?;
 
+        Ok(())
+    }
+
+    fn create_context_a() -> Context {
+        let regs_values: HashMap<Register, u64> = [ 
+            (unicorn::RegisterX86::EAX,   255),
+            (unicorn::RegisterX86::EBP, 12288),
+            (unicorn::RegisterX86::EBX,  4660),
+            (unicorn::RegisterX86::ECX,     0),
+            (unicorn::RegisterX86::EDI,  8192),
+            (unicorn::RegisterX86::EDX, 12345),
+            (unicorn::RegisterX86::EIP,  4113),
+            (unicorn::RegisterX86::ESI,  8192),
+            (unicorn::RegisterX86::ESP, 16384),
+        ].iter().map(|(reg,val)| { (Register {0: *reg}, *val) }).collect::<HashMap<_, _>>();
+
+        let memory: HashMap<u64, Vec<u8>> = hashmap![
+            4096 => vec![176,255,102,187,52,18,102,186,57,48,102,137,23,102,137,95,16],
+            8192 => vec![57,48],
+            8208 => vec![52,18],
+        ];
+
+        Context {
+            code_addr:  0x01000,
+            code_size:  0x01000,
+            data_addr:  0x02000,
+            data_size:  0x01000,
+            stack_addr: 0x03000,
+            stack_size: 0x01000,
+            regs_values,
+            memory,
+        }
+    }
+
+    #[test]
+    fn test_context_x32() {
+        let mut context = Context::new().regs_x86_32().build();
+        let mut machine = machine::x32::new_from_context(&context);
+        assert_eq!(run_code(&mut machine).is_ok(), true);
+        context.save(&mut machine);
+        
         // Serialize it to a JSON string.
         let result = serde_json::to_string(&context);
         assert_eq!(result.is_ok(), true);
         if let Ok(json) = result {
-            println!("SERIALIZED: '{:?}'", json);
-            assert_eq!(CONTEXT_JSON, json);
+            assert_eq!(CONTEXT_JSON_A, json);
             let new_context = serde_json::from_str::<Context>(&json);
             assert_eq!(new_context.is_ok(), true);
             assert_eq!(context, new_context.unwrap());
@@ -339,32 +488,76 @@ mod tests {
     }
 
     #[test]
+    fn test_serialize_context_x32() {
+        let context = create_context_a();
+        let json = serde_json::to_string(&context);
+        assert_eq!(json.is_ok(), true);
+        assert_eq!(CONTEXT_JSON_A, json.unwrap());
+    }
+
+    #[test]
+    fn test_deserialize_context_x32() {
+        let expected_context = create_context_a();
+        let context = serde_json::from_str::<Context>(CONTEXT_JSON_A);
+        assert_eq!(context.is_ok(), true);
+        assert_eq!(expected_context, context.unwrap());
+
+        let context = Context::new_from_json(CONTEXT_JSON_A);
+        assert_eq!(context.is_ok(), true);
+        assert_eq!(expected_context, context.unwrap());
+    }
+    
+    #[test]
     fn test_save_restore_context_x32() {
-        let mut context1 = Context::new_x86_32();
-        let mut bytes = CONTEXT_JSON.as_bytes();
-        let result = context1.read_from(&mut bytes);
-        let mut machine = machine::x32::new_from_context(&context1);
-        let mut emu = machine.unicorn.borrow();
+        let context1 = Context::new_from_json(CONTEXT_JSON_A).unwrap();
+        let mut machine = machine::x32::new();
+        assert_eq!(context1.restore(&mut machine).is_ok(), true);
 
+        // expected to fail because the default context has no registers defined
+        let mut context2 = Context::default();
+        context2.save(&mut machine);
+        assert_ne!(context1, context2);
 
-        assert_eq!(result.is_ok(), true);
-        context1.restore(&mut emu);
-
-        let mut context2 = Context::new_x86_32();
-        context2.save(&emu);
-        assert_eq!(context1, context2);
+        let mut context3 = Context::new().regs_x86_32().build();
+        context3.save(&mut machine);
+        assert_eq!(context1, context3);
 
         let mut buf: Cursor<Vec<u8>> = Cursor::new(Vec::<u8>::new());
-        let result = context2.write_to(&mut buf);
+        let result = context3.write_to(&mut buf);
         assert_eq!(result.is_ok(), true);
         let json = buf.into_inner().iter().map(|&c| c as char).collect::<String>();
-        assert_eq!(CONTEXT_JSON, json);
+        assert_eq!(CONTEXT_JSON_A, json);
+    }
+
+    #[test]
+    fn test_save_context_x32() {
+        let mut context = Context::new().regs_x86_32().build();
+        let mut machine = machine::x32::new_from_context(&context);
+        assert_eq!(run_code(&mut machine).is_ok(), true);
+        context.save(&mut machine);
+
+        let expected_context = create_context_a();
+        assert_eq!(context, expected_context);
+    }
+
+    #[test]
+    fn test_restore_context_x32() {
+        let context = Context::new_from_json(CONTEXT_JSON_B).unwrap();
+        let mut machine = machine::x32::new();
+        assert_eq!(context.restore(&mut machine).is_ok(), true);
+
+        assert_eq!(machine.code_addr, 0x10000);
+        assert_eq!(machine.code_size, 0x02000);
+        assert_eq!(machine.data_addr, 0x12000);
+        assert_eq!(machine.data_size, 0x02000);
+        assert_eq!(machine.stack_addr, 0x14000);
+        assert_eq!(machine.stack_size, 0x02000);
     }
 
     #[test]
     fn test_read_write_context_x32() {
-        let mut context = Context::new_x86_32();
-        let mut bytes = CONTEXT_JSON.as_bytes();
+        let mut context = Context::new().regs_x86_32().build();
+        let mut bytes = CONTEXT_JSON_A.as_bytes();
         let result = context.read_from(&mut bytes);
         assert_eq!(result.is_ok(), true);
 
@@ -372,7 +565,7 @@ mod tests {
         let result = context.write_to(&mut buf);
         assert_eq!(result.is_ok(), true);
         let json = buf.into_inner().iter().map(|&c| c as char).collect::<String>();
-        assert_eq!(CONTEXT_JSON, json);
+        assert_eq!(CONTEXT_JSON_A, json);
     }
 
     #[test]
@@ -381,8 +574,8 @@ mod tests {
         let file = File::create(path);
         assert_eq!(file.is_ok(), true);
         let mut file = BufWriter::new(file.unwrap());
-        let mut context = Context::new_x86_32();
-        let mut bytes = CONTEXT_JSON.as_bytes();
+        let mut context = Context::new().regs_x86_32().build();
+        let mut bytes = CONTEXT_JSON_A.as_bytes();
         let result = context.read_from(&mut bytes);
         assert_eq!(result.is_ok(), true);
         let result = context.write_to(&mut file);
