@@ -19,7 +19,6 @@ pub mod parser;
 use machine::interface::Machine;
 use parser::Parser;
 
-
 arg_enum!{
     #[derive(Debug)]
     pub enum Arch {
@@ -35,7 +34,8 @@ where
         Clone +
         num_traits::Num +
         fmt::Debug +
-        fmt::LowerHex
+        fmt::LowerHex +
+        parser::TwosComplement
 {
 
     m.print_version();
@@ -115,7 +115,8 @@ where
         Clone +
         num_traits::Num +
         fmt::Debug +
-        fmt::LowerHex
+        fmt::LowerHex +
+        parser::TwosComplement
 {
     for inst in inst_vec {
         if let Ok(inst) = parser.parse_asm(&inst) {

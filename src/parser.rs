@@ -12,6 +12,23 @@ use strum_macros::EnumIter;
 use crate::machine::context::Register;
 
 
+pub trait TwosComplement {
+    fn twos_complement(&self) -> Self;
+}
+
+impl TwosComplement for u32 {
+    fn twos_complement(&self) -> Self {
+        (!self).wrapping_add(1)
+    }
+}
+
+impl TwosComplement for u64 {
+    fn twos_complement(&self) -> Self {
+        (!self).wrapping_add(1)
+    }
+}
+
+
 /// ParseError enumerates all possible errors returned by this library.
 #[derive(Error, Debug, PartialEq)]
 pub enum ParseError {
@@ -95,7 +112,8 @@ where
         Clone +
         num_traits::Num +
         fmt::Debug +
-        fmt::LowerHex
+        fmt::LowerHex +
+        TwosComplement
 {
 
     pub fn new() -> Self {
@@ -123,9 +141,11 @@ where
                 r"^\$\d+$",                         //  9
                 r"^\$_+$",                          // 10
                 r"^\d+$",                           // 11 single digit numbers
-                r"^[a-zA-Z][0-9a-zA-Z_\.]*$",         // 12 Identifier
+                r"^[a-zA-Z][0-9a-zA-Z_\.]*$",       // 12 Identifier
                 r"^_+[0-9a-zA-Z]+[0-9a-zA-Z_]*$",   // 13 Identifier
                 r#"^".+"$"#,                        // 14 Identifier
+                r"^-\d+$",                          // 15 negative decimal integer
+                r"^\+\d+$",                         // 16 positive decimal integer
             ]).unwrap(),
             delim: "[]()+-*/%&^|<>, ".as_bytes()
                                      .iter()
@@ -219,23 +239,23 @@ where
             Err(ParseError::ParameterError)
         } else {
             let result = match matches[0] {
-                0  => Parser::map_int(self.from_constant(&input[1..])),
-                1  => Parser::map_int(Parser::from_str_radix(&input[2..], 16)),
-                2  => Parser::map_int(Parser::from_str_radix(&input[2..],  8)),
-                3  => Parser::map_int(Parser::from_str_radix(&input[2..],  2)),
-                4  => Parser::map_int(Parser::from_str_radix(&input[2..], 10)),
-                5  => Parser::map_int(Parser::from_str_radix(&input[..input.len()-1], 8)),
-                6  => Parser::map_int(Parser::from_str_radix(&input[..input.len()-1], 2)),
-                7  => Parser::map_int(Parser::from_str_radix(&input[..input.len()-1], 10)),
-                8|11 => Parser::map_int(Parser::from_str_radix(input, 10)),
-                9  => {
+                0     => Parser::map_int(self.from_constant(&input[1..])),
+                1     => Parser::map_int(Parser::from_str_radix(&input[2..], 16)),
+                2     => Parser::map_int(Parser::from_str_radix(&input[2..],  8)),
+                3     => Parser::map_int(Parser::from_str_radix(&input[2..],  2)),
+                4     => Parser::map_int(Parser::from_str_radix(&input[2..], 10)),
+                5     => Parser::map_int(Parser::from_str_radix(&input[..input.len()-1], 8)),
+                6     => Parser::map_int(Parser::from_str_radix(&input[..input.len()-1], 2)),
+                7     => Parser::map_int(Parser::from_str_radix(&input[..input.len()-1], 10)),
+                8|11  => Parser::map_int(Parser::from_str_radix(input, 10)),
+                9     => {
                     let index = u32::from_str_radix(&input[1..], 10);
                     if index.is_err() {
                         return Err(ParseError::ParameterError);
                     }
                     Parser::map_int(self.get_value(index.unwrap() as usize))
                 },
-                10 => {
+                10    => {
                     match self.values.last() {
                         Some(value) => Ok(Parameter::Integer(value.clone())),
                         None        => return Err(ParseError::ParameterError),
@@ -243,7 +263,14 @@ where
                 },
                 12|13 => Ok(Parameter::Identifier(input.to_string())),
                 14    => Ok(Parameter::Identifier(input[1..input.len()-1].to_string())),
-                _  => return Err(ParseError::ParameterError),
+                15    => {
+                    let abs: T = Parser::from_str_radix(&input[1..], 10)
+                                .map_err(|_e| ParseError::ParameterError)?;
+                    
+                    Ok(Parameter::Integer(abs.twos_complement()))
+                },
+                16    => Parser::map_int(Parser::from_str_radix(&input[1..], 10)),
+                _     => return Err(ParseError::ParameterError),
             };
             result
         }
@@ -513,8 +540,35 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_token() {
+    fn test_parse_parameter() {
+        let mut parser = Parser::<u32>::new();
 
+        parser.set_reg_names(&Context::regs_x86_32());
+        parser.define_constant("offset", 0x10000);
+
+        let pairs: Vec<(&str, Result<Parameter<u32>,ParseError>)> = vec![
+            ("filename",              Ok(Parameter::Identifier("filename".to_string()))),
+            ("filename.txt",          Ok(Parameter::Identifier("filename.txt".to_string()))),
+            ("\"context.txt\"",       Ok(Parameter::Identifier("context.txt".to_string()))),
+            ("eax",                   Ok(Parameter::Register(Register::from("EAX")))),
+            ("$offset",               Ok(Parameter::Integer(0x10000))),
+            ("label",                 Ok(Parameter::Identifier("label".to_string()))),
+            ("0x1000",                Ok(Parameter::Integer(0x1000))),
+            ("-1",                    Ok(Parameter::Integer(0xffffffff))),
+            ("-1000",                 Ok(Parameter::Integer(0xfffffc18))),
+            ("-0",                    Ok(Parameter::Integer(0x00000000))),
+            ("-2147483648",           Ok(Parameter::Integer(0x80000000))),
+            ("+1",                    Ok(Parameter::Integer(0x00000001))),
+            ("+1000",                 Ok(Parameter::Integer(0x000003e8))),
+            ("+0",                    Ok(Parameter::Integer(0x00000000))),
+            ("+2147483647",           Ok(Parameter::Integer(0x7fffffff))),
+            ("0xfffffffff",           Err(ParseError::ParameterError)),
+            ("$num",                  Err(ParseError::ParameterError)),
+        ];
+
+        for pair in pairs {
+            assert_eq!(parser.parse_parameter(pair.0), pair.1);
+        }
     }
 
 }
