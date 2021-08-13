@@ -1,4 +1,4 @@
-use ansi_term::Colour::{Blue, Purple, Yellow};
+use ansi_term::Colour::{Blue, Yellow};
 use keystone::AsmResult;
 use std::convert::TryFrom;
 use capstone::prelude::*;
@@ -87,18 +87,36 @@ impl Machine {
             mem_write!(cpu, *addr, bytes)?;
         }
     
-        cpu.add_intr_hook(x86_32::hook_intr)
-                .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
-                    .context(format!("Failure to add interrupt hook: {:?}", err))
-                )?;
-    
-        cpu.add_insn_sys_hook(unicorn::InsnSysX86::SYSCALL,
-                                cpu_context.code_addr,
-                                cpu_context.code_addr+cpu_context.code_size-1,
-                                x86_32::hook_syscall)
-                .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
-                    .context(format!("Failure to add syscall hook: {:?}", err))
-                )?;
+        match cpu_context.arch {
+            CpuArch::X86_32 => {
+                cpu.add_intr_hook(x86_32::hook_intr)
+                    .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
+                        .context(format!("Failure to add interrupt hook: {:?}", err))
+                    )?;
+        
+                cpu.add_insn_sys_hook(unicorn::InsnSysX86::SYSCALL,
+                                    cpu_context.code_addr,
+                                    cpu_context.code_addr+cpu_context.code_size-1,
+                                    x86_32::hook_syscall)
+                    .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
+                        .context(format!("Failure to add syscall hook: {:?}", err))
+                    )?;
+            },
+            CpuArch::X86_64 => {
+                cpu.add_intr_hook(x86_64::hook_intr)
+                    .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
+                        .context(format!("Failure to add interrupt hook: {:?}", err))
+                    )?;
+        
+                cpu.add_insn_sys_hook(unicorn::InsnSysX86::SYSCALL,
+                                    cpu_context.code_addr,
+                                    cpu_context.code_addr+cpu_context.code_size-1,
+                                    x86_64::hook_syscall)
+                    .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
+                        .context(format!("Failure to add syscall hook: {:?}", err))
+                    )?;
+            },
+        };
             
         let word_size = match cpu_context.arch {
             CpuArch::X86_32 => x86_32::WORD_SIZE,
@@ -148,10 +166,13 @@ impl Machine {
         let emu = self.unicorn.borrow();
         println!(
             "{}",
-            Yellow.paint("----------------- cpu context -----------------")
+            Yellow.paint(format!("{:-^1$}", " cpu context ", 4*(self.word_size*2+8)+3))
         );
 
         for (index,(reg,prev_value)) in self.regs_values.iter_mut().enumerate() {
+            if index > 0 && (index % 4) == 0 {
+                println!("");
+            }
             let reg_value = reg_read!(emu, reg.0 as i32)?;
             let reg_value_str = match self.word_size {
                 4 => format!("0x{:08x}", reg_value),
@@ -165,10 +186,8 @@ impl Machine {
             } else {
                 print!("{:3} : {} ", reg.to_string(), reg_value_str);
             }
-            if (index % 4) == 3 {
-                println!("");
-            }
         }
+        println!("");
 
         Ok(())
     }
@@ -204,9 +223,10 @@ impl Machine {
         let emu = self.unicorn.borrow();
         println!(
             "{}",
-            Purple.paint("----------------- code segment -----------------")
+            Yellow.paint(format!("{:-^1$}", " code segment ", 4*(self.word_size*2+8)+3))
         );
-        println!("{:08x?}", self.previous_inst_addr);
+
+        //println!("{:08x?}", self.previous_inst_addr);
 
         if self.previous_inst_addr.len() >= 2 {
             let s_addr = self.previous_inst_addr.first().unwrap();
@@ -246,10 +266,11 @@ impl Machine {
 
     pub fn print_data(&mut self) -> Result<()> {
         let emu = self.unicorn.borrow();
-        println!(
-            "{}",
-            Purple.paint("----------------- data segment -----------------")
-        );
+        //println!(
+        //    "{}",
+        //    Yellow.paint(format!("{:-^1$}", " data segment ", 4*(self.word_size*2+8)+3))
+        //);
+
         let mem_data = mem_read_as_vec!(emu, self.data_addr as u64, 5 * 16)?;
 
         self.printer.display_offset(self.data_addr);
@@ -261,10 +282,10 @@ impl Machine {
 
     pub fn print_stack(&mut self) -> Result<()> {
         let emu = self.unicorn.borrow();
-        println!(
-            "{}",
-            Purple.paint("----------------- stack segment -----------------")
-        );
+        //println!(
+        //    "{}",
+        //    Yellow.paint(format!("{:-^1$}", " stack segment ", 4*(self.word_size*2+8)+3))
+        //);
 
         let start_address = self.stack_addr + self.stack_size - u64::try_from(self.word_size).unwrap() * 4 * 8;
         let mem_data = mem_read_as_vec!(emu, start_address as u64, 5 * 16)?;

@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate num_derive;
+
 use std::str;
 use std::fmt::Debug;
 use std::path::PathBuf;
@@ -156,6 +159,11 @@ fn run_batch(m: &mut Machine, parser: &Parser, inst_vec: Vec<String>) -> anyhow:
         let inst = parser.parse_asm(&inst)?;
         let code = m.asm(inst.to_string(), 0)?;
         
+        println!(
+            "{}",
+            Yellow.paint(format!("{:=<1$}", "", 4*(m.word_size*2+8)+3))
+        );
+
         println!("{} : {} {} : {}",
             Yellow.paint("mnemonic"),
             inst.trim(),

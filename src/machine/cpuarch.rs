@@ -168,25 +168,33 @@ impl<'de> serde::de::Deserialize<'de> for Register {
 
 
 pub mod x86_32 {
+    use std::convert::TryFrom;
     use std::time::SystemTime;
+    use chrono::{Local,TimeZone,Offset};
     use super::Register;
     use crate::machine::interface::ExecutionError;
     use crate::machine::interrupt::InterruptX86;
     use crate::machine::cpuarch::CpuArch;
-    use crate::{reg_read,reg_write,mem_write};
+    use crate::{reg_read,reg_write,mem_write,mem_read_as_vec};
+    use num_traits::cast::*;
 
-    pub const CODE_ADDR:  u64 = 0x08048000;
-    pub const CODE_SIZE:  u64 = 0x00100000;
-    pub const DATA_ADDR:  u64 = CODE_ADDR + CODE_SIZE;
-    pub const DATA_SIZE:  u64 = 0x00100000;
-    pub const STACK_TOP:  u64 = 0xc0000000;
-    pub const STACK_SIZE: u64 = 0x00100000; // 1MByte
-    pub const STACK_ADDR: u64 = STACK_TOP - STACK_SIZE;
-    pub const WORD_SIZE: usize = 4;
+    pub const CODE_ADDR:     u64 = 0x08048000;
+    pub const CODE_SIZE:     u64 = 0x00100000;
+    pub const DATA_ADDR:     u64 = CODE_ADDR + CODE_SIZE;
+    pub const DATA_SIZE:     u64 = 0x00100000;
+    pub const STACK_TOP:     u64 = 0xc0000000;
+    pub const STACK_SIZE:    u64 = 0x00100000; // 1MByte
+    pub const STACK_ADDR:    u64 = STACK_TOP - STACK_SIZE;
+    pub const WORD_SIZE:   usize = 4;
+    pub const LINUX_SYSCALL: u32 = 0x80;
 
-    pub const SYS_WRITE: u64           =   4;
-    pub const SYS_TIME: u64            =  13;
-    pub const SYS_GETTIMEOFDAY: u64    =  78;
+    #[derive(FromPrimitive, ToPrimitive)]
+    enum Syscall {
+        Write         =      4,
+        Time          =     13,
+        GetTimeOfDay  =     78,
+        Unknown       = 0xffff,
+    }
 
     pub fn regs() -> Vec<Register> {
         super::regs_map().iter().filter(|(_,(set,flag))| *flag && set.contains(&CpuArch::X86_32)).map(|(reg,_)| *reg).collect()
@@ -195,7 +203,7 @@ pub mod x86_32 {
     pub fn hook_syscall(engine: unicorn::UnicornHandle) -> () {
         let reg_eip = reg_read!(engine, unicorn::RegisterX86::EIP as i32).unwrap_or(0);
         let reg_eax = reg_read!(engine, unicorn::RegisterX86::EAX as i32).unwrap_or(0);
-        println!("SYSCALL #{:#04x} @ {:#010x}", reg_eax, reg_eip);
+        println!("SYSCALL: #{:#04x} @ {:#010x}", reg_eax, reg_eip);
 
         ()
     }
@@ -203,33 +211,53 @@ pub mod x86_32 {
     pub fn hook_intr(mut engine: unicorn::UnicornHandle, intno: u32) -> () {
         let reg_eip = reg_read!(engine, unicorn::RegisterX86::EIP as i32).unwrap_or(0);
         let reg_eax = reg_read!(engine, unicorn::RegisterX86::EAX as i32).unwrap_or(0);
-        println!("INTERRUPT #{:#04x} '{}' @ {:#010x}",
+        println!("INTERRUPT: #{:#04x} '{}' @ {:#010x}",
                 intno, InterruptX86{id: intno}, reg_eip);
 
-        if intno == 0x80 {
-            match reg_eax {
-                SYS_WRITE => {
-                    //let reg_ebx = reg_read!(engine, unicorn::RegisterX86::EBX as i32).unwrap();
+        if intno == LINUX_SYSCALL {
+            match Syscall::from_u64(reg_eax).unwrap_or(Syscall::Unknown) {
+                Syscall::Write => {
+                    let reg_ecx = reg_read!(engine, unicorn::RegisterX86::ECX as i32).unwrap_or(0);
+                    let reg_edx = reg_read!(engine, unicorn::RegisterX86::EDX as i32).unwrap_or(0);
+                    if reg_ecx != 0 && reg_edx != 0 {
+                        let mem_data = mem_read_as_vec!(engine, reg_ecx, usize::try_from(reg_edx).unwrap_or(0)).unwrap_or(vec![]);
+                        println!("SYS_WRITE: @0x{:08x}: '{}', size = {}", reg_ecx, String::from_utf8_lossy(&mem_data), reg_edx);
+                    }
                 },
-                SYS_TIME => {
+                Syscall::Time => {
                     let secs = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
                         Ok(d) => d.as_secs(),
                         _     => 0,
                     };
                     let _ = reg_write!(engine, unicorn::RegisterX86::EAX as i32, secs);
+                    let reg_ebx = reg_read!(engine, unicorn::RegisterX86::EBX as i32).unwrap_or(0);
+                    if reg_ebx != 0 {
+                        let bytes = (secs as u32).to_le_bytes();
+                        let _ = mem_write!(engine, reg_ebx, &bytes);
+                        println!("SYS_TIME: @0x{:08x}: {} (0x{:08x})", reg_ebx, secs, secs);
+                    } else {
+                        println!("SYS_TIME: eax = {} (0x{:08x})", secs, secs);
+                    }
                 },
-                SYS_GETTIMEOFDAY => {
-                    let (secs,subsecs) = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-                        Ok(d) => (d.as_secs(),d.subsec_micros()),
-                        _     => (0,0),
-                    };
-                    let reg_ebx = reg_read!(engine, unicorn::RegisterX86::EBX as i32).unwrap();
-                    let bytes = [(secs as u32).to_le_bytes(), (subsecs as u32).to_le_bytes()].concat();
-                    let _ = mem_write!(engine, reg_ebx, &bytes);
+                Syscall::GetTimeOfDay => {
+                    let reg_ebx = reg_read!(engine, unicorn::RegisterX86::EBX as i32).unwrap_or(0);
+                    if reg_ebx != 0 {
+                        let (secs,subsecs) = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+                            Ok(d) => (d.as_secs(),d.subsec_micros()),
+                            _     => (0,0),
+                        };
+                        let bytes = [(secs as u32).to_le_bytes(), (subsecs as u32).to_le_bytes()].concat();
+                        let _ = mem_write!(engine, reg_ebx, &bytes);
+                    }
+                    let reg_ecx = reg_read!(engine, unicorn::RegisterX86::ECX as i32).unwrap_or(0);
+                    if reg_ecx != 0 {
+                        let tz_offset_min: i32 = Local.timestamp(0, 0).offset().fix().local_minus_utc()/60;
+                        let dst: u32 = 0;
+                        let bytes = [tz_offset_min.to_le_bytes(), dst.to_le_bytes()].concat();
+                        let _ = mem_write!(engine, reg_ecx, &bytes);
+                    }
                 },
-                _ => {
-
-                },
+                _ => println!("SYSCALL: unknown id #{}", reg_eax),
             };
         }
 
@@ -238,11 +266,15 @@ pub mod x86_32 {
 }
 
 pub mod x86_64 {
+    use std::convert::TryFrom;
+    use std::time::SystemTime;
+    use chrono::{Local,TimeZone,Offset};
     use super::Register;
     use crate::machine::interface::ExecutionError;
     use crate::machine::interrupt::InterruptX86;
     use crate::machine::cpuarch::CpuArch;
-    use crate::reg_read;
+    use crate::{reg_read,mem_write,mem_read_as_vec};
+    use num_traits::cast::*;
 
     pub const CODE_ADDR: u64 = 0x00400000;
     pub const CODE_SIZE: u64 = 0x00100000;
@@ -253,30 +285,62 @@ pub mod x86_64 {
     pub const STACK_TOP:  u64 = STACK_ADDR + STACK_SIZE;
     pub const WORD_SIZE: usize = 8;
 
-    pub const SYS_WRITE: u64           =   1;
-    //pub const SYS_TIME: u64            =  13;
-    pub const SYS_GETTIMEOFDAY: u64    =  96;
+    #[derive(FromPrimitive, ToPrimitive)]
+    enum Syscall {
+        Write         =      1,
+        GetTimeOfDay  =     96,
+        Unknown       = 0xffff,
+    }
 
     pub fn regs() -> Vec<Register> {
         super::regs_map().iter().filter(|(_,(set,flag))| *flag && set.contains(&CpuArch::X86_64)).map(|(reg,_)| *reg).collect()
     }
 
-    pub fn hook_syscall(engine: unicorn::UnicornHandle) -> () {
+    pub fn hook_syscall(mut engine: unicorn::UnicornHandle) -> () {
         let reg_rip = reg_read!(engine, unicorn::RegisterX86::RIP as i32).unwrap();
         let reg_rax = reg_read!(engine, unicorn::RegisterX86::RAX as i32).unwrap();
-        println!("SYSCALL #{:#04x} @ {:#010x}", reg_rax, reg_rip);
-    
+        println!("SYSCALL: #{:#04x} @ {:#010x}", reg_rax, reg_rip);
+
+        match Syscall::from_u64(reg_rax).unwrap_or(Syscall::Unknown) {
+            Syscall::Write => {
+                let reg_rsi = reg_read!(engine, unicorn::RegisterX86::RSI as i32).unwrap_or(0);
+                let reg_rdx = reg_read!(engine, unicorn::RegisterX86::RDX as i32).unwrap_or(0);
+                if reg_rsi != 0 && reg_rdx != 0 {
+                    let mem_data = mem_read_as_vec!(engine, reg_rsi, usize::try_from(reg_rdx).unwrap_or(0)).unwrap_or(vec![]);
+                    println!("SYS_WRITE: @0x{:08x}: '{}', size = {}", reg_rsi, String::from_utf8_lossy(&mem_data), reg_rdx);
+                } else {
+                    println!("SYS_WRITE: @0x{:08x}, size = {}", reg_rsi, reg_rdx);
+                }
+            },
+            Syscall::GetTimeOfDay => {
+                let reg_rdi = reg_read!(engine, unicorn::RegisterX86::RDI as i32).unwrap_or(0);
+                if reg_rdi != 0 {
+                    let (secs,subsecs) = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+                        Ok(d) => (d.as_secs(),d.subsec_micros()),
+                        _     => (0,0),
+                    };
+                    let bytes = [(secs as u64).to_le_bytes(), (subsecs as u64).to_le_bytes()].concat();
+                    let _ = mem_write!(engine, reg_rdi, &bytes);
+                }
+                let reg_rsi = reg_read!(engine, unicorn::RegisterX86::RSI as i32).unwrap_or(0);
+                if reg_rsi != 0 {
+                    let tz_offset_min = (Local.timestamp(0, 0).offset().fix().local_minus_utc()/60) as i64;
+                    let dst: u64 = 0;
+                    let bytes = [tz_offset_min.to_le_bytes(), dst.to_le_bytes()].concat();
+                    let _ = mem_write!(engine, reg_rsi, &bytes);
+                }
+            },
+            _ => println!("SYSCALL: unknown id #{}", reg_rax),
+        };
+
         ()
     }
     
     pub fn hook_intr(engine: unicorn::UnicornHandle, intno: u32) -> () {
-        let reg_rip = reg_read!(engine, unicorn::RegisterX86::RIP as i32).unwrap();
-        let reg_rax = reg_read!(engine, unicorn::RegisterX86::RAX as i32).unwrap();
-        println!("INTERRUPT #{:#04x} '{}' @ {:#010x}",
+        let reg_rip = reg_read!(engine, unicorn::RegisterX86::RIP as i32).unwrap_or(0);
+        //let reg_rax = reg_read!(engine, unicorn::RegisterX86::RAX as i32).unwrap();
+        println!("INTERRUPT: #{:#04x} '{}' @ {:#010x}",
                  intno, InterruptX86{id: intno}, reg_rip);
-    
-        if intno == 0x80 {
-        }
     
         ()
     }
