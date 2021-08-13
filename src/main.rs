@@ -1,6 +1,7 @@
 use std::str;
-use std::fmt;
 use std::fmt::Debug;
+use std::path::PathBuf;
+use std::fs::File;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use rustyline::config::EditMode;
@@ -8,42 +9,98 @@ use rustyline::config::Builder;
 use ansi_term::Colour::Red;
 use ansi_term::Colour::Green;
 use ansi_term::Colour::Yellow;
-use clap::{Arg, App, arg_enum, value_t};
+use structopt::StructOpt;
+use anyhow::{Context, Result};
 
 pub mod hexprint;
 pub mod squeezer;
 pub mod machine;
 pub mod parser;
-
+pub mod lexer;
 
 use machine::interface::Machine;
+use machine::context::CpuContext;
+use machine::cpuarch::CpuArch;
 use parser::Parser;
+use parser::Command;
+use parser::ParseError;
+use crate::lexer::Token;
+//use crate::ok_or_error;
 
-arg_enum!{
-    #[derive(Debug)]
-    pub enum Arch {
-        X32,
-        X64,
-    }
+
+#[derive(Debug, StructOpt)]
+#[structopt(name = "rudi", about = "rudi- RUst Debugger Interactive")]
+struct Options {
+    /// Execute instructions in batch execution mode
+    #[structopt(short, long)]
+    batch: Option<String>,
+
+    /// File from which to read initial cpu context
+    #[structopt(short, long, parse(from_os_str))]
+    context: Option<PathBuf>,
+
+    /// File where to save cpu context before exit 
+    #[structopt(short, long, parse(from_os_str))]
+    save: Option<PathBuf>,
+    
+    /// Select processor architecture
+    #[structopt(long, possible_values = &CpuArch::variants(), case_insensitive = true, default_value = "X86_32")]
+    arch: CpuArch,
 }
 
 
-fn run_interactive<T>(mut m: Machine, parser: Parser<T>)
-where
-    T:
-        Clone +
-        num_traits::Num +
-        fmt::Debug +
-        fmt::LowerHex +
-        parser::TwosComplement
-{
+fn command_define(parser: &mut Parser, params: &Vec<Token>) -> anyhow::Result<()> {
+    if params.len() == 0 {
+        for (name, value) in parser.constants() {
+            println!("{:20} {:#10x} {:12}", name, value, value);
+        }
+    }
+    Ok(())
+}
 
+fn command_eval(parser: &mut Parser, params: &Vec<Token>) -> anyhow::Result<()> {
+    if params.len() == 1 {
+        let value = &params[0];
+        match value {
+            Token::Integer(value) => {
+                let index = parser.add_value(*value);
+                println!("${} => {}", index, value);
+            },
+            _  => return Err(anyhow::Error::new(ParseError::ParameterError)),
+        }
+    } else {
+        return Err(anyhow::Error::new(ParseError::ParameterError));
+    }
+    Ok(())
+}
+
+
+fn execute_asm(m: &mut Machine, parser: &mut Parser, line: &str) -> anyhow::Result<()> {
+    let parsed_line = parser.parse_asm(&line)?;
+    let code = m.asm(parsed_line.to_string(), 0)?;
+    println!("{} : {} {} :{}",
+        Yellow.paint("mnemonic"),
+        line.trim(),
+        Yellow.paint("hex"),
+        code.bytes.iter().map(|x| format!(" {:02x}", x)).collect::<String>()
+    );
+    m.execute_instruction(code.bytes)?;
+    m.print_code()?;
+    m.print_register()?;
+    m.print_flags()?;
+    m.print_data()?;
+    m.print_stack()?;
+
+    Ok(())
+}
+
+fn run_interactive(m: &mut Machine, parser: &mut Parser) -> anyhow::Result<()> {
     m.print_version();
-    m.init_cache();
-    m.print_register();
-    m.print_flags();
-    m.print_data();
-    m.print_stack();
+    m.init_cache()?;
+    m.print_register()?;
+    m.print_flags()?;
+    m.print_data()?;
+    m.print_stack()?;
 
     let editor_config = Builder::new().edit_mode(EditMode::Vi).build();
     let mut rl = Editor::<()>::with_config(editor_config);
@@ -54,40 +111,23 @@ where
         let input = rl.readline(Green.paint(">> ").to_string().as_str());
         match input {
             Ok(line) => {
-                let command = parser.parse_cmd(&line);
-                if command.is_none() {
-                    match parser.parse_asm(&line) {
-                        Ok(parsed_line) => {
-                            let result = m.asm(parsed_line.to_string(), 0);
-                            match result {
-                                Ok(r) => {
-                                    println!("{} : {} {} :{}",
-                                        Yellow.paint("mnemonic"),
-                                        line.trim(),
-                                        Yellow.paint("hex"),
-                                        r.bytes.iter().map(|x| format!(" {:02x}", x)).collect::<String>()
-                                    );
-                                    let result = m.execute_instruction(r.bytes);
-                                    if let Err(e) = result {
-                                        println!("{}: failed to execute instruction, '{:?}'",
-                                            Red.paint("ERROR"), e);
-                                    } else {
-                                        m.print_code();
-                                        m.print_register();
-                                        m.print_flags();
-                                        m.print_data();
-                                        m.print_stack();
-                                    }
-                                }
-                                Err(e) => println!("{}: failed to assemble, '{:?}'",
-                                              Red.paint("ERROR"), e),
-                            }
-                        },
-                        Err(e) => println!("{}: failed to assemble, '{:?}'",
-                                      Red.paint("ERROR"), e),
-                    };
-                } else {
-                }
+                let result: Result<()> = match parser.parse_cmd(&line) {
+                    Some(Ok((command,params))) => {
+                        match command {
+                            Command::Quit      => { break; },
+                            Command::Eval      => command_eval(parser, &params),
+                            Command::Define    => command_define(parser, &params),
+                            _                  => { Ok(())}, 
+                        }
+                    },
+                    Some(Err(err)) => {
+                        Err(anyhow::Error::new(ParseError::ParameterError).context(format!("{:?}", err)))
+                    },
+                    None => {
+                        execute_asm(m, parser, &line)
+                    },
+                };
+                ok_or_error!(result);
                 rl.add_history_entry(line.as_str());
             }
             Err(ReadlineError::Interrupted) => {
@@ -99,7 +139,7 @@ where
                 break;
             }
             Err(err) => {
-                println!("Error: {:?}", err);
+                eprintln!("{}: '{:?}'", Red.paint("ERROR"), err);
                 break;
             }
         }
@@ -107,84 +147,75 @@ where
     if rl.save_history("history.txt").is_err() {
         println!("Note: Cannot write to history file.");
     }
+
+    Ok(())
 }
 
-fn run_batch<T>(mut m: Machine, parser: Parser<T>, inst_vec: Vec<String>)
-where
-    T:
-        Clone +
-        num_traits::Num +
-        fmt::Debug +
-        fmt::LowerHex +
-        parser::TwosComplement
-{
+fn run_batch(m: &mut Machine, parser: &Parser, inst_vec: Vec<String>) -> anyhow::Result<()> {
     for inst in inst_vec {
-        if let Ok(inst) = parser.parse_asm(&inst) {
-            let result = m.asm(inst.to_string(), 0);
-            match result {
-                Ok(r) => {
-                    println!("{} : {} {} : {}",
-                        Yellow.paint("mnemonic"),
-                        inst.trim(),
-                        Yellow.paint("hex"),
-                        r
-                    );
-                    let result = m.execute_instruction(r.bytes);
-                    if let Err(e) = result {
-                        println!("{}: failed to execute instruction, '{:?}'",
-                            Red.paint("ERROR"), e);
-                    }
-                    m.print_register();
-                }
-                Err(e) => {
-                    println!("{}: failed to assemble, '{:?}'",
-                              Red.paint("ERROR"), e);
-                    break;
-                },
-            }
-        } else {
-            println!("{}: cannot parse integer", Red.paint("ERROR"));
-            break;
-        }
+        let inst = parser.parse_asm(&inst)?;
+        let code = m.asm(inst.to_string(), 0)?;
+        
+        println!("{} : {} {} : {}",
+            Yellow.paint("mnemonic"),
+            inst.trim(),
+            Yellow.paint("hex"),
+            code.bytes.iter().map(|x| format!(" {:02x}", x)).collect::<String>()
+        );
+        
+        m.execute_instruction(code.bytes)?;
+        m.print_register()?;
     }
+
+    Ok(())
 }
 
+fn run(options: &Options) -> anyhow::Result<()> {
+    let save_file = match &options.save {
+        Some(path) => Some(File::create(path)?),
+        None       => None,
+    };
+
+    let mut cpu_context = match &options.context {
+        Some(path) => {
+            let mut file = File::open(path)
+                .with_context(|| format!("ERROR: Cannot read from context file"))?;
+            let mut cpu_context = CpuContext::new().arch(options.arch).build();
+            cpu_context.read_from(&mut file)
+                .with_context(|| format!("ERROR: Cannot read from context file"))?;
+
+            cpu_context
+        },
+        _ => CpuContext::new().arch(options.arch).build(),
+    };
+
+    let mut machine = match options.arch {
+        CpuArch::X86_32 => Machine::new_from_context(&cpu_context)?, 
+        CpuArch::X86_64 => Machine::new_from_context(&cpu_context)?, 
+    };
+
+    let mut parser = Parser::new();
+
+    if let Some(inst_str) = &options.batch {
+        let inst_vec = inst_str.split(';')
+                          .into_iter()
+                          .map(|s| s.to_lowercase())
+                          .collect::<Vec<String>>();
+        run_batch(&mut machine, &mut parser, inst_vec)?;
+    } else {
+        run_interactive(&mut machine, &mut parser)?;
+    }
+
+    if let Some(mut file) = save_file {
+        cpu_context.save(&mut machine)?;
+        cpu_context.write_to(&mut file)
+            .with_context(|| format!("ERROR: Cannot write to context save file"))?;
+    };
+
+    Ok(())
+}
 
 fn main() {
-    let args = App::new("rudi")
-        .version("0.1.0")
-        .author("Ralf R. <rdrcode@gmx.eu>")
-        .about("RUst Debugger Interactive")
-        .arg(Arg::with_name("arch")
-            .short("m")
-            .long("arch")
-            .takes_value(true)
-            .required(true)
-            .help("machine architecure"))
-        .arg(Arg::with_name("batch")
-            .short("b")
-            .long("batch")
-            .takes_value(true)
-            .required(false)
-            .help("batch instruction sequence"))
-        .get_matches();
-
-    let arch = value_t!(args, "arch", Arch).unwrap_or_else(|e| e.exit());
-
-    if let Some(inst_str) = args.value_of("batch") {
-        let inst_vec = inst_str.split(';')
-                         .into_iter()
-                         .map(|s| s.to_lowercase())
-                         .collect::<Vec<String>>();
-        match arch {
-            Arch::X32 => run_batch(machine::x32::new(), Parser::<u32>::new(), inst_vec),
-            Arch::X64 => run_batch(machine::x64::new(), Parser::<u64>::new(), inst_vec),
-        };
-    } else {
-        match arch {
-            Arch::X32 => run_interactive(machine::x32::new(), Parser::<u32>::new()),
-            Arch::X64 => run_interactive(machine::x64::new(), Parser::<u64>::new()),
-        };
-    }
-
+    let options = Options::from_args();
+    ok_or_error!(run(&options));
 }

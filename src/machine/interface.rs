@@ -1,21 +1,46 @@
 use ansi_term::Colour::{Blue, Purple, Yellow};
-use keystone::{AsmResult, Error};
-use std::collections::HashMap;
+use keystone::AsmResult;
 use std::convert::TryFrom;
 use capstone::prelude::*;
+use unicorn::unicorn_const::{Arch, Mode, Permission};
+use keystone::*;
+use anyhow::Result;
+use thiserror::Error;
+use indexmap::IndexMap;
+
 
 use crate::hexprint::Printer;
-//use crate::machine::context::Context;
+use crate::hexprint::BorderStyle;
+use crate::{emu_start,mem_map,mem_write,mem_read_as_vec,reg_read,reg_write};
+use super::cpuarch::{self,CpuArch,Register,x86_32,x86_64};
+use super::context::CpuContext;
 
+/// ExecutionError enumerates all possible errors returned by this module
+#[derive(Error, Debug)]
+pub enum ExecutionError {
+    /// Represents an internal error
+    #[error("Internal error")]
+    InternalError,
 
-pub struct Machine<'a> {
-    pub register_map: HashMap<&'a str, unicorn::RegisterX86>,
+    /// Represents a Unicorn engine failure
+    #[error("Unicorn engine error")]
+    UnicornError,
+
+    /// Represents a Capstone engine failure
+    #[error("Capstone engine error")]
+    CapstoneError,
+
+    /// Represents a Keystone engine failure
+    #[error("Keystone engine error")]
+    KeystoneError,
+}
+
+pub struct Machine {
     pub keystone: keystone::Keystone,
     pub capstone: Capstone,
     pub unicorn: unicorn::Unicorn,
-    pub sorted_reg_names: Vec<&'a str>,
     pub word_size: usize,
-    pub previous_reg_value: HashMap<&'a str, u64>,
+    pub regs_values: IndexMap<Register, u64>,
     pub sp: unicorn::RegisterX86,
     pub ip: unicorn::RegisterX86,
     pub flags: unicorn::RegisterX86,
@@ -29,7 +54,87 @@ pub struct Machine<'a> {
     pub printer: Printer,
 }
 
-impl<'a> Machine<'a> {
+impl Machine {
+
+    pub fn new(arch: CpuArch) -> Result<Machine> {
+        let cpu_context = match arch {
+            CpuArch::X86_32 => CpuContext::new()
+                                .arch(CpuArch::X86_32)
+                                .code_segment(x86_32::CODE_ADDR, x86_32::CODE_SIZE)
+                                .data_segment(x86_32::DATA_ADDR, x86_32::DATA_SIZE)
+                                .stack_segment(x86_32::STACK_ADDR, x86_32::STACK_SIZE),
+            CpuArch::X86_64 => CpuContext::new()
+                                .arch(CpuArch::X86_64)
+                                .code_segment(x86_64::CODE_ADDR, x86_64::CODE_SIZE)
+                                .data_segment(x86_64::DATA_ADDR, x86_64::DATA_SIZE)
+                                .stack_segment(x86_64::STACK_ADDR, x86_64::STACK_SIZE),
+        }.build();
+    
+        Machine::new_from_context(&cpu_context)
+    }
+
+    pub fn new_from_context(cpu_context: &CpuContext) -> Result<Machine> {
+        let mut unicorn = Machine::unicorn_engine(cpu_context.arch)?;
+    
+        let mut cpu = unicorn.borrow();
+    
+        // map and load memory
+        mem_map!(cpu, cpu_context.code_addr, usize::try_from(cpu_context.code_size).unwrap(), Permission::ALL)?;
+        mem_map!(cpu, cpu_context.data_addr, usize::try_from(cpu_context.data_size).unwrap(), Permission::ALL)?;
+        mem_map!(cpu, cpu_context.stack_addr, usize::try_from(cpu_context.stack_size).unwrap(), Permission::ALL)?;
+    
+        for (addr, bytes) in &cpu_context.memory {
+            mem_write!(cpu, *addr, bytes)?;
+        }
+    
+        cpu.add_intr_hook(x86_32::hook_intr)
+                .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
+                    .context(format!("Failure to add interrupt hook: {:?}", err))
+                )?;
+    
+        cpu.add_insn_sys_hook(unicorn::InsnSysX86::SYSCALL,
+                                cpu_context.code_addr,
+                                cpu_context.code_addr+cpu_context.code_size-1,
+                                x86_32::hook_syscall)
+                .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
+                    .context(format!("Failure to add syscall hook: {:?}", err))
+                )?;
+            
+        let word_size = match cpu_context.arch {
+            CpuArch::X86_32 => x86_32::WORD_SIZE,
+            CpuArch::X86_64 => x86_64::WORD_SIZE,
+        };
+        
+        let mut regs_values = IndexMap::new();
+        for reg in cpuarch::regs(cpu_context.arch) {
+            regs_values.insert(reg, 0u64);
+        }
+    
+        for (reg,val) in cpu_context.regs_values.iter() {
+            reg_write!(cpu, *reg, *val)?;
+        }
+    
+        reg_write!(cpu, unicorn::RegisterX86::EIP as i32, cpu_context.code_addr)?;
+    
+        Ok(Machine {
+            keystone: Machine::keystone_engine(cpu_context.arch)?,
+            capstone: Machine::capstone_engine(cpu_context.arch)?,
+            unicorn,
+            word_size,
+            regs_values,
+            sp: unicorn::RegisterX86::ESP,
+            ip: unicorn::RegisterX86::EIP,
+            flags: unicorn::RegisterX86::EFLAGS,
+            previous_inst_addr: vec![cpu_context.code_addr],
+            code_addr: cpu_context.code_addr,
+            code_size: cpu_context.code_size,
+            data_addr: cpu_context.data_addr,
+            data_size: cpu_context.data_size,
+            stack_addr: cpu_context.stack_addr,
+            stack_size: cpu_context.stack_size,
+            printer: Printer::new(true, BorderStyle::Unicode, false),
+        })
+    }
 
     pub fn print_version(&self) {
         //let (major, minor) = unicorn::unicorn_version();
@@ -39,62 +144,63 @@ impl<'a> Machine<'a> {
         //println!("keystone version: {}.{}", major, minor);
     }
 
-    pub fn print_register(&mut self) {
+    pub fn print_register(&mut self) -> Result<()> {
         let emu = self.unicorn.borrow();
         println!(
             "{}",
             Yellow.paint("----------------- cpu context -----------------")
         );
 
-        for &reg_name in &self.sorted_reg_names {
-            if reg_name == "end" {
-                println!();
-                continue;
-            }
-
-            let &uc_reg = self.register_map.get(reg_name).unwrap();
-            let reg_val = emu.reg_read(uc_reg as i32).unwrap();
-            let previous_reg_val = *self.previous_reg_value.get(reg_name).unwrap();
-            let reg_val_str: String;
-            match self.word_size {
-                4 => reg_val_str = format!("0x{:08x}", reg_val),
-                8 => reg_val_str = format!("0x{:016x}", reg_val),
+        for (index,(reg,prev_value)) in self.regs_values.iter_mut().enumerate() {
+            let reg_value = reg_read!(emu, reg.0 as i32)?;
+            let reg_value_str = match self.word_size {
+                4 => format!("0x{:08x}", reg_value),
+                8 => format!("0x{:016x}", reg_value),
                 _ => unreachable!(),
-            }
+            };
 
-            if previous_reg_val != reg_val {
-                print!("{:3} : {} ", reg_name, Blue.paint(reg_val_str));
-                self.previous_reg_value.insert(reg_name, reg_val);
+            if *prev_value != reg_value {
+                print!("{:3} : {} ", reg.to_string(), Blue.paint(reg_value_str));
+                *prev_value = reg_value;
             } else {
-                print!("{:3} : {} ", reg_name, reg_val_str);
+                print!("{:3} : {} ", reg.to_string(), reg_value_str);
+            }
+            if (index % 4) == 3 {
+                println!("");
             }
         }
+
+        Ok(())
     }
 
-    pub fn asm(&self, str: String, address: u64) -> Result<AsmResult, Error> {
-        return self.keystone.asm(str, address);
+    pub fn asm(&self, str: String, address: u64) -> Result<AsmResult> {
+        let result = self.keystone.asm(str, address)
+                .map_err(|err| anyhow::Error::new(ExecutionError::KeystoneError)
+                    .context(format!("Failure to assemble code: {:?}", err))
+                )?;
+
+        Ok(result)
     }
 
-    pub fn execute_instruction(&mut self, byte_arr: Vec<u8>) -> Result<u64,unicorn::unicorn_const::uc_error> {
+    pub fn execute_instruction(&mut self, byte_arr: Vec<u8>) -> Result<u64> {
         let mut emu = self.unicorn.borrow();
-        let cur_ip_val = emu.reg_read(self.ip as i32).unwrap();
-        let _ = emu.mem_write(cur_ip_val, &byte_arr);
-        let result = emu.emu_start(
+        let reg_ip = self.ip as i32;
+        let cur_ip_val = reg_read!(emu, reg_ip)?;
+        mem_write!(emu, cur_ip_val, &byte_arr)?;
+        emu_start!(emu,
             cur_ip_val,
             cur_ip_val + u64::try_from(byte_arr.len()).unwrap(),
             10 * unicorn::unicorn_const::SECOND_SCALE,
-            1000,
-        );
-        let new_ip_val = emu.reg_read(self.ip as i32).unwrap();
-        self.previous_inst_addr.push(new_ip_val);
+            1000
+        )?;
 
-        match result {
-            Ok(_) => Ok(new_ip_val),
-            Err(e) => Err(e),
-        }
+        let new_ip_val = reg_read!(emu,self.ip as i32)?;
+        self.previous_inst_addr.push(new_ip_val);
+   
+        Ok(new_ip_val)
     }
 
-    pub fn print_code(&mut self) {
+    pub fn print_code(&mut self) -> Result<()> {
         let emu = self.unicorn.borrow();
         println!(
             "{}",
@@ -107,50 +213,53 @@ impl<'a> Machine<'a> {
             let e_addr = self.previous_inst_addr.last().unwrap();
             let len = e_addr - s_addr;
 
-            if let Ok(v) = emu.mem_read_as_vec(*s_addr, usize::try_from(len).unwrap()) {
-                //let mut bytes: &[u8];
-                let insns = self
-                                .capstone
-                                .disasm_count(&v[..],
-                                              *s_addr,
-                                              self.previous_inst_addr.len()-1).unwrap();
-                for i in insns.iter() {
-                    println!("{:08x} {:8} {}",
-                             i.address(),
-                             i.mnemonic().unwrap(),
-                             i.op_str().unwrap());
-                }
+            let bytes = mem_read_as_vec!(emu, *s_addr, usize::try_from(len).unwrap())?;
+            let insns = self
+                            .capstone
+                            .disasm_count(&bytes[..],
+                                            *s_addr,
+                                            self.previous_inst_addr.len()-1)
+                            .map_err(|err| anyhow::Error::new(ExecutionError::CapstoneError)
+                                .context(format!("Failure to disassembe bytes {:?}: {:?}", bytes, err))
+                            )?;         
+       
+            for i in insns.iter() {
+                println!("{:08x} {:8} {}",
+                            i.address(),
+                            i.mnemonic().unwrap(),
+                            i.op_str().unwrap());
             }
         }
 
+        Ok(())
     }
 
-    pub fn init_cache(&mut self) {
+    pub fn init_cache(&mut self) -> Result<()> {
         let emu = self.unicorn.borrow();
-        let mem_data = emu
-            .mem_read_as_vec(self.data_addr as u64, 5 * 16)
-            .unwrap();
+        let mem_data = mem_read_as_vec!(emu, self.data_addr as u64, 5 * 16)?;
 
         self.printer.display_offset(self.data_addr);
         self.printer.init_cache(mem_data.as_slice());
+
+        Ok(())
     }
 
-    pub fn print_data(&mut self) {
+    pub fn print_data(&mut self) -> Result<()> {
         let emu = self.unicorn.borrow();
         println!(
             "{}",
             Purple.paint("----------------- data segment -----------------")
         );
-        let mem_data = emu
-            .mem_read_as_vec(self.data_addr as u64, 5 * 16)
-            .unwrap();
+        let mem_data = mem_read_as_vec!(emu, self.data_addr as u64, 5 * 16)?;
 
         self.printer.display_offset(self.data_addr);
         self.printer.print_all(mem_data.as_slice()).unwrap();
         self.printer.reset();
+
+        Ok(())
     }
 
-    pub fn print_stack(&mut self) {
+    pub fn print_stack(&mut self) -> Result<()> {
         let emu = self.unicorn.borrow();
         println!(
             "{}",
@@ -158,16 +267,16 @@ impl<'a> Machine<'a> {
         );
 
         let start_address = self.stack_addr + self.stack_size - u64::try_from(self.word_size).unwrap() * 4 * 8;
-        let mem_data = emu
-            .mem_read_as_vec(start_address as u64, 5 * 16)
-            .unwrap();
+        let mem_data = mem_read_as_vec!(emu, start_address as u64, 5 * 16)?;
 
         self.printer.display_offset(start_address);
         self.printer.print_all(mem_data.as_slice()).unwrap();
         self.printer.reset();
+
+        Ok(())
     }
 
-    pub fn print_flags(&mut self) {
+    pub fn print_flags(&mut self) -> Result<()> {
         let emu = self.unicorn.borrow();
         let flag_bits = vec![
             ('C', 0),
@@ -179,7 +288,8 @@ impl<'a> Machine<'a> {
             ('O', 11),
         ];
 
-        let flag_val = emu.reg_read(self.flags as i32).unwrap();
+        let flag_val = reg_read!(emu, self.flags as i32)?;
+
         print!("FLAGS 0x{:08x} [ ", flag_val);
         for flag_bit in flag_bits {
             let flag_val = (flag_val >> flag_bit.1) & 1;
@@ -193,6 +303,53 @@ impl<'a> Machine<'a> {
             //}
         }
         println!("]");
+
+        Ok(())
     }
 
+    fn unicorn_engine(arch: CpuArch) -> Result<unicorn::Unicorn> {
+        let engine = match arch {
+            CpuArch::X86_32 => unicorn::Unicorn::new(Arch::X86, Mode::MODE_32),
+            CpuArch::X86_64 => unicorn::Unicorn::new(Arch::X86, Mode::MODE_64),
+        }.map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
+            .context(format!("Failure to create new unicorn engine instance: {:?}", err))
+        )?;
+
+        Ok(engine)
+    }
+
+    fn keystone_engine(arch: CpuArch) -> Result<keystone::Keystone> {
+        let engine = match arch {
+            CpuArch::X86_32 => Keystone::new(keystone::Arch::X86, keystone::Mode::LITTLE_ENDIAN | keystone::Mode::MODE_32),
+            CpuArch::X86_64 => Keystone::new(keystone::Arch::X86, keystone::Mode::LITTLE_ENDIAN | keystone::Mode::MODE_64),
+        }.map_err(|err| anyhow::Error::new(ExecutionError::KeystoneError)
+                    .context(format!("Failure to create new keystone engine instance: {:?}", err))
+        )?;
+
+
+        engine.option(OptionType::SYNTAX, OptionValue::SYNTAX_NASM)
+            .map_err(|err| anyhow::Error::new(ExecutionError::KeystoneError)
+                .context(format!("Failure to create new keystone engine instance: {:?}", err))
+            )?;
+
+        Ok(engine)
+    }
+    
+    fn capstone_engine(arch: CpuArch) -> Result<Capstone> {
+        let engine = match arch {
+            CpuArch::X86_32 => Capstone::new()
+                                .x86()
+                                .mode(arch::x86::ArchMode::Mode32)
+                                .syntax(arch::x86::ArchSyntax::Intel),
+            CpuArch::X86_64 => Capstone::new()
+                                .x86()
+                                .mode(arch::x86::ArchMode::Mode64)
+                                .syntax(arch::x86::ArchSyntax::Intel),
+        }.detail(false).build()
+            .map_err(|err| anyhow::Error::new(ExecutionError::CapstoneError)
+                .context(format!("Failure to create new capstone engine instance: {:?}", err))
+            )?;
+    
+        Ok(engine)
+    }
 }

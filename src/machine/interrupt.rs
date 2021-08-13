@@ -31,6 +31,7 @@ impl fmt::Display for InterruptX86 {
             0x13 => write!(fmt, "SIMD Floating-Point Exception"),
             0x14 => write!(fmt, "Virtualization Exception"),
             0x15 => write!(fmt, "Control Protection Exception"),
+            0x80 => write!(fmt, "Linux System Call"),
             _    => write!(fmt, "Undefined Interrupt"),
         }
     }
