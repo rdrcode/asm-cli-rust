@@ -190,6 +190,7 @@ pub mod x86_32 {
 
     #[derive(FromPrimitive, ToPrimitive)]
     enum Syscall {
+        Exit          =      1,
         Write         =      4,
         Time          =     13,
         GetTimeOfDay  =     78,
@@ -215,13 +216,14 @@ pub mod x86_32 {
                 intno, InterruptX86{id: intno}, reg_eip);
 
         if intno == LINUX_SYSCALL {
+            let reg_ebx = reg_read!(engine, unicorn::RegisterX86::EBX as i32).unwrap_or(0);
             match Syscall::from_u64(reg_eax).unwrap_or(Syscall::Unknown) {
                 Syscall::Write => {
                     let reg_ecx = reg_read!(engine, unicorn::RegisterX86::ECX as i32).unwrap_or(0);
                     let reg_edx = reg_read!(engine, unicorn::RegisterX86::EDX as i32).unwrap_or(0);
                     if reg_ecx != 0 && reg_edx != 0 {
                         let mem_data = mem_read_as_vec!(engine, reg_ecx, usize::try_from(reg_edx).unwrap_or(0)).unwrap_or(vec![]);
-                        println!("SYS_WRITE: @0x{:08x}: '{}', size = {}", reg_ecx, String::from_utf8_lossy(&mem_data), reg_edx);
+                        println!("SYS_WRITE: fd={}, @0x{:08x}: '{}', size = {}", reg_ebx, reg_ecx, String::from_utf8_lossy(&mem_data), reg_edx);
                     }
                 },
                 Syscall::Time => {
@@ -230,7 +232,6 @@ pub mod x86_32 {
                         _     => 0,
                     };
                     let _ = reg_write!(engine, unicorn::RegisterX86::EAX as i32, secs);
-                    let reg_ebx = reg_read!(engine, unicorn::RegisterX86::EBX as i32).unwrap_or(0);
                     if reg_ebx != 0 {
                         let bytes = (secs as u32).to_le_bytes();
                         let _ = mem_write!(engine, reg_ebx, &bytes);
@@ -239,8 +240,11 @@ pub mod x86_32 {
                         println!("SYS_TIME: eax = {} (0x{:08x})", secs, secs);
                     }
                 },
+                Syscall::Exit => {
+                    println!("SYS_EXIT: error code {}", reg_ebx);
+                    let _ = engine.emu_stop();
+                },
                 Syscall::GetTimeOfDay => {
-                    let reg_ebx = reg_read!(engine, unicorn::RegisterX86::EBX as i32).unwrap_or(0);
                     if reg_ebx != 0 {
                         let (secs,subsecs) = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
                             Ok(d) => (d.as_secs(),d.subsec_micros()),
@@ -288,6 +292,7 @@ pub mod x86_64 {
     #[derive(FromPrimitive, ToPrimitive)]
     enum Syscall {
         Write         =      1,
+        Exit          =     60,
         GetTimeOfDay  =     96,
         Unknown       = 0xffff,
     }
@@ -301,19 +306,23 @@ pub mod x86_64 {
         let reg_rax = reg_read!(engine, unicorn::RegisterX86::RAX as i32).unwrap();
         println!("SYSCALL: #{:#04x} @ {:#010x}", reg_rax, reg_rip);
 
+        let reg_rdi = reg_read!(engine, unicorn::RegisterX86::RDI as i32).unwrap_or(0);
         match Syscall::from_u64(reg_rax).unwrap_or(Syscall::Unknown) {
             Syscall::Write => {
                 let reg_rsi = reg_read!(engine, unicorn::RegisterX86::RSI as i32).unwrap_or(0);
                 let reg_rdx = reg_read!(engine, unicorn::RegisterX86::RDX as i32).unwrap_or(0);
                 if reg_rsi != 0 && reg_rdx != 0 {
                     let mem_data = mem_read_as_vec!(engine, reg_rsi, usize::try_from(reg_rdx).unwrap_or(0)).unwrap_or(vec![]);
-                    println!("SYS_WRITE: @0x{:08x}: '{}', size = {}", reg_rsi, String::from_utf8_lossy(&mem_data), reg_rdx);
+                    println!("SYS_WRITE: fd={}, @0x{:08x}: '{}', size = {}", reg_rdi, reg_rsi, String::from_utf8_lossy(&mem_data), reg_rdx);
                 } else {
-                    println!("SYS_WRITE: @0x{:08x}, size = {}", reg_rsi, reg_rdx);
+                    println!("SYS_WRITE: fd={}, @0x{:08x}, size = {}", reg_rdi, reg_rsi, reg_rdx);
                 }
             },
+            Syscall::Exit => {
+                println!("SYS_EXIT: error code {}", reg_rdi);
+                let _ = engine.emu_stop();
+            },
             Syscall::GetTimeOfDay => {
-                let reg_rdi = reg_read!(engine, unicorn::RegisterX86::RDI as i32).unwrap_or(0);
                 if reg_rdi != 0 {
                     let (secs,subsecs) = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
                         Ok(d) => (d.as_secs(),d.subsec_micros()),
@@ -348,7 +357,16 @@ pub mod x86_64 {
 
 #[cfg(test)]
 mod tests {
+    use unicorn::unicorn_const::{SECOND_SCALE};
+    use anyhow::Result;
+
     use super::*;
+    use crate::machine::interface::Machine;
+    use crate::machine::interface::ExecutionError;
+    use crate::machine::context::CpuContext;
+    use crate::machine::cpuarch::{CpuArch,Register};
+    use crate::{emu_start,mem_write,mem_read_as_vec,reg_write,reg_read};
+
 
     #[test]
     fn register_to_from_x32() {
@@ -357,5 +375,180 @@ mod tests {
             let r = Register::from(name.as_str());
             assert_eq!(reg, r);
         }
+    }
+
+    #[test]
+    fn test_syscall_write_32() -> Result<()> {
+        let cpu_context = CpuContext::new().arch(CpuArch::X86_32).build();
+        let mut machine = Machine::new_from_context(&cpu_context)?;
+        let mut emu = machine.unicorn.borrow();
+
+        let x86_code: Vec<u8> = vec![
+            0x31, 0xc0,                   // xor eax,eax
+            0x0f, 0xa2,                   // cpuid
+            0x89, 0x1e,                   // mov[esi],ebx
+            0x89, 0x56, 0x04,             // mov[esi+4],edx
+            0x89, 0x4e, 0x08,             // mov[esi+8],ecx
+            0xb8, 0x04, 0x00, 0x00, 0x00, // mov eax,4
+            0xbb, 0x01, 0x00, 0x00, 0x00, // mov ebx,1
+            0x89, 0xf1,                   // mov ecx,esi
+            0xba, 0x0c, 0x00, 0x00, 0x00, // mov edx,0x0c
+            0xcd, 0x80,                   // int 0x80
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+        ];
+
+        reg_write!(emu, unicorn::RegisterX86::EIP as i32, machine.code_addr)?;
+        let s_addr = machine.code_addr;
+        mem_write!(emu, s_addr, &x86_code)?;
+        emu_start!(emu, 
+            s_addr,
+            s_addr + x86_code.len() as u64,
+            10 * SECOND_SCALE,
+            1000
+        )?;
+
+        let reg_eip = reg_read!(emu, unicorn::RegisterX86::EIP as i32)?;
+        assert_eq!(s_addr+(x86_code.len() as u64), reg_eip);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_syscall_write_64() -> Result<()> {
+        let cpu_context = CpuContext::new().arch(CpuArch::X86_64).build();
+        let mut machine = Machine::new_from_context(&cpu_context)?;
+        let mut emu = machine.unicorn.borrow();
+
+        let x86_code: Vec<u8> = vec![
+            0x31, 0xc0,                   // xor eax,eax
+            0x0f, 0xa2,                   // cpuid
+            0x89, 0x1e,                   // mov[rsi],ebx
+            0x89, 0x56, 0x04,             // mov[rsi+4],edx
+            0x89, 0x4e, 0x08,             // mov[rsi+8],ecx
+            0xb8, 0x01, 0x00, 0x00, 0x00, // mov eax,1
+            0xbf, 0x01, 0x00, 0x00, 0x00, // mov edi,1
+            0xba, 0x0c, 0x00, 0x00, 0x00, // mov edx,0x0c
+            0x0f, 0x05,                   // syscall
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+        ];
+
+        reg_write!(emu, unicorn::RegisterX86::RIP as i32, machine.code_addr)?;
+        let s_addr = machine.code_addr;
+        mem_write!(emu, s_addr, &x86_code)?;
+        emu_start!(emu, 
+            s_addr,
+            s_addr + x86_code.len() as u64,
+            10 * SECOND_SCALE,
+            1000
+        )?;
+
+        let reg_rip = reg_read!(emu, unicorn::RegisterX86::RIP as i32)?;
+        assert_eq!(s_addr+(x86_code.len() as u64), reg_rip);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_syscall_exit_32() -> Result<()> {
+        let cpu_context = CpuContext::new().arch(CpuArch::X86_32).build();
+        let mut machine = Machine::new_from_context(&cpu_context)?;
+        let mut emu = machine.unicorn.borrow();
+
+        let x86_code_1: Vec<u8> = vec![
+            0x66, 0xbb, 0x34, 0x12,       // mov bx,0x1234
+            0x66, 0xba, 0x39, 0x30,       // mov dx,12345
+            0x66, 0x89, 0x17,             // mov [edi],dx
+            0x66, 0x89, 0x5f, 0x10,       // mov [edi+16],bx
+            0xb8, 0x01, 0x00, 0x00, 0x00, // mov eax,1
+            0xbb, 0x2a, 0x00, 0x00, 0x00, // mov ebx,42
+            0x90,                         // nop
+        ];
+        let x86_code_2: Vec<u8> = vec![
+            0xcd, 0x80,                   // int 0x80
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+        ];
+
+        reg_write!(emu, unicorn::RegisterX86::EIP as i32, machine.code_addr)?;
+        let s_addr = machine.code_addr;
+        mem_write!(emu, s_addr, &x86_code_1)?;
+        mem_write!(emu, s_addr+(x86_code_1.len() as u64), &x86_code_2)?;
+        emu_start!(emu, 
+            s_addr,
+            s_addr + (x86_code_1.len() + x86_code_2.len()) as u64,
+            10 * SECOND_SCALE,
+            1000
+        )?;
+
+        let reg_eip = reg_read!(emu, unicorn::RegisterX86::EIP as i32)?;
+        // EIP points to the instruction after the interrupt instruction,
+        // which allocates two bytes
+        let int_addr = reg_eip - 2;
+        assert_eq!(s_addr+(x86_code_1.len() as u64), int_addr);
+        let mem_data = mem_read_as_vec!(emu, int_addr as u64, 2)?;
+        assert_eq!(vec![0xcd,0x80], mem_data);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_syscall_exit_x64() -> Result<()> {
+        let cpu_context = CpuContext::new().arch(CpuArch::X86_64).build();
+        let mut machine = Machine::new_from_context(&cpu_context)?;
+        let mut emu = machine.unicorn.borrow();
+
+        let x86_code_1: Vec<u8> = vec![
+            0x66, 0xbb, 0x34, 0x12,       // mov bx,0x1234
+            0x66, 0xba, 0x39, 0x30,       // mov dx,12345
+            0x66, 0x89, 0x17,             // mov [edi],dx
+            0x66, 0x89, 0x5f, 0x10,       // mov [edi+16],bx
+            0xb8, 0x3c, 0x00, 0x00, 0x00, // mov eax,60
+            0xbf, 0x2a, 0x00, 0x00, 0x00, // mov edi,42
+            0x90,                         // nop
+        ];
+        let x86_code_2: Vec<u8> = vec![
+            0x0f, 0x05,                   // syscall
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+            0x90,                         // nop
+        ];
+
+        reg_write!(emu, unicorn::RegisterX86::RIP as i32, machine.code_addr)?;
+        let s_addr = machine.code_addr;
+        mem_write!(emu, s_addr, &x86_code_1)?;
+        mem_write!(emu, s_addr+(x86_code_1.len() as u64), &x86_code_2)?;
+        emu_start!(emu, 
+            s_addr,
+            s_addr + (x86_code_1.len() + x86_code_2.len()) as u64,
+            10 * SECOND_SCALE,
+            1000
+        )?;
+
+        let reg_rip = reg_read!(emu, unicorn::RegisterX86::RIP as i32)?;
+        // EIP points to the instruction after the syscall instruction,
+        // which allocates two bytes
+        let int_addr = reg_rip - 2;
+        assert_eq!(s_addr+(x86_code_1.len() as u64), int_addr);
+        let mem_data = mem_read_as_vec!(emu, int_addr as u64, 2)?;
+        assert_eq!(vec![0x0f,0x05], mem_data);
+
+        Ok(())
     }
 }
