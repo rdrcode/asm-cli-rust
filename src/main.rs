@@ -23,7 +23,7 @@ pub mod lexer;
 
 use machine::interface::Machine;
 use machine::context::CpuContext;
-use machine::cpuarch::CpuArch;
+use machine::cpuarch::{CpuArch,ClockMode,x86_32,x86_64};
 use parser::Parser;
 use parser::Command;
 use parser::ParseError;
@@ -49,6 +49,10 @@ struct Options {
     /// Select processor architecture
     #[structopt(long, possible_values = &CpuArch::variants(), case_insensitive = true, default_value = "X86_32")]
     arch: CpuArch,
+
+    /// Define fixed timestamp (ticks) to be returned by gettimeofday and time system calls
+    #[structopt(long)]
+    ticks: Option<i64>,    
 }
 
 
@@ -197,10 +201,13 @@ fn run(options: &Options) -> anyhow::Result<()> {
         _ => CpuContext::new().arch(options.arch).build(),
     };
 
-    let mut machine = match options.arch {
-        CpuArch::X86_32 => Machine::new_from_context(&cpu_context)?, 
-        CpuArch::X86_64 => Machine::new_from_context(&cpu_context)?, 
-    };
+    let mut machine = Machine::new_from_context(&cpu_context)?;
+    if let Some(ticks) = options.ticks {
+        match options.arch {
+            CpuArch::X86_32 => x86_32::set_clock_mode(ClockMode::Fixed((ticks,0))), 
+            CpuArch::X86_64 => x86_64::set_clock_mode(ClockMode::Fixed((ticks,0))), 
+        };
+    }
 
     let mut parser = Parser::new();
 

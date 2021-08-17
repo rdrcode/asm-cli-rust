@@ -1,4 +1,6 @@
+use std::convert::TryFrom;
 use std::fmt;
+use std::time::SystemTime;
 use std::collections::HashSet;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -166,17 +168,43 @@ impl<'de> serde::de::Deserialize<'de> for Register {
     }
 }
 
+#[derive(Debug,Copy,Clone,Eq,PartialEq)]
+pub enum ClockMode {
+    SystemClock,
+    Offset(i64),
+    Fixed((i64,u32)),
+}
+
+fn get_time(mode: ClockMode) -> (i64,u32) {
+    let (secs_now,subsecs_now) = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(d) => (i64::try_from(d.as_secs()).unwrap_or(0),d.subsec_micros()),
+        _     => (0,0),
+    };
+    match mode {
+        ClockMode::Fixed(timeval) => timeval,
+        ClockMode::Offset(offset) => (secs_now+offset,subsecs_now),
+        ClockMode::SystemClock => (secs_now,subsecs_now),
+    }
+}
+
 
 pub mod x86_32 {
     use std::convert::TryFrom;
-    use std::time::SystemTime;
+    use std::cell::RefCell;
     use chrono::{Local,TimeZone,Offset};
     use super::Register;
+    use super::ClockMode;
     use crate::machine::interface::ExecutionError;
     use crate::machine::interrupt::InterruptX86;
+    use crate::machine::cpuarch;
     use crate::machine::cpuarch::CpuArch;
     use crate::{reg_read,reg_write,mem_write,mem_read_as_vec};
-    use num_traits::cast::*;
+    use num_traits::cast::FromPrimitive;
+
+    thread_local!(
+        static CLOCK_MODE: RefCell<ClockMode> = RefCell::new(ClockMode::SystemClock);
+        static CLOCK_LAST: RefCell<Option<(i64,u32)>> = RefCell::new(None))
+    ;
 
     pub const CODE_ADDR:     u64 = 0x08048000;
     pub const CODE_SIZE:     u64 = 0x00100000;
@@ -188,7 +216,7 @@ pub mod x86_32 {
     pub const WORD_SIZE:   usize = 4;
     pub const LINUX_SYSCALL: u32 = 0x80;
 
-    #[derive(FromPrimitive, ToPrimitive)]
+    #[derive(FromPrimitive,ToPrimitive)]
     enum Syscall {
         Exit          =      1,
         Write         =      4,
@@ -199,6 +227,33 @@ pub mod x86_32 {
 
     pub fn regs() -> Vec<Register> {
         super::regs_map().iter().filter(|(_,(set,flag))| *flag && set.contains(&CpuArch::X86_32)).map(|(reg,_)| *reg).collect()
+    }
+
+    pub fn get_clock_mode() -> ClockMode {
+        CLOCK_MODE.with(|clock_mode| {
+            *clock_mode.borrow()
+        })
+    }
+
+    pub fn set_clock_mode(mode: ClockMode) {
+        CLOCK_MODE.with(|clock_mode| {
+            *clock_mode.borrow_mut() = mode;
+        });
+    }
+
+    pub fn get_time() -> (i64,u32) {
+        let timeval = cpuarch::get_time(get_clock_mode());
+        CLOCK_LAST.with(|last| {
+            *last.borrow_mut() = Some(timeval);
+        });
+
+        timeval
+    }
+
+    pub fn get_last_time() -> Option<(i64,u32)> {
+        CLOCK_LAST.with(|last| {
+            *last.borrow()
+        })
     }
 
     pub fn hook_syscall(engine: unicorn::UnicornHandle) -> () {
@@ -225,13 +280,11 @@ pub mod x86_32 {
                         let mem_data = mem_read_as_vec!(engine, reg_ecx, usize::try_from(reg_edx).unwrap_or(0)).unwrap_or(vec![]);
                         println!("SYS_WRITE: fd={}, @0x{:08x}: '{}', size = {}", reg_ebx, reg_ecx, String::from_utf8_lossy(&mem_data), reg_edx);
                     }
+                    let _ = reg_write!(engine, unicorn::RegisterX86::EAX as i32, reg_edx);
                 },
                 Syscall::Time => {
-                    let secs = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-                        Ok(d) => d.as_secs(),
-                        _     => 0,
-                    };
-                    let _ = reg_write!(engine, unicorn::RegisterX86::EAX as i32, secs);
+                    let (secs,_) = get_time();
+                    let _ = reg_write!(engine, unicorn::RegisterX86::EAX as i32, u64::try_from(secs).unwrap_or(0));
                     if reg_ebx != 0 {
                         let bytes = (secs as u32).to_le_bytes();
                         let _ = mem_write!(engine, reg_ebx, &bytes);
@@ -245,21 +298,23 @@ pub mod x86_32 {
                     let _ = engine.emu_stop();
                 },
                 Syscall::GetTimeOfDay => {
+                    let mut error = false;
                     if reg_ebx != 0 {
-                        let (secs,subsecs) = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-                            Ok(d) => (d.as_secs(),d.subsec_micros()),
-                            _     => (0,0),
-                        };
+                        let (secs,subsecs) = get_time();
                         let bytes = [(secs as u32).to_le_bytes(), (subsecs as u32).to_le_bytes()].concat();
-                        let _ = mem_write!(engine, reg_ebx, &bytes);
+                        error |= mem_write!(engine, reg_ebx, &bytes).is_err();
                     }
                     let reg_ecx = reg_read!(engine, unicorn::RegisterX86::ECX as i32).unwrap_or(0);
                     if reg_ecx != 0 {
                         let tz_offset_min: i32 = Local.timestamp(0, 0).offset().fix().local_minus_utc()/60;
                         let dst: u32 = 0;
                         let bytes = [tz_offset_min.to_le_bytes(), dst.to_le_bytes()].concat();
-                        let _ = mem_write!(engine, reg_ecx, &bytes);
+                        error |= mem_write!(engine, reg_ecx, &bytes).is_err();
                     }
+                    let _ = reg_write!(engine,
+                        unicorn::RegisterX86::EAX as i32,
+                        match error {true => u64::MAX, false => 0}
+                    );
                 },
                 _ => println!("SYSCALL: unknown id #{}", reg_eax),
             };
@@ -271,34 +326,69 @@ pub mod x86_32 {
 
 pub mod x86_64 {
     use std::convert::TryFrom;
-    use std::time::SystemTime;
+    use std::cell::RefCell;
     use chrono::{Local,TimeZone,Offset};
     use super::Register;
+    use super::ClockMode;
     use crate::machine::interface::ExecutionError;
     use crate::machine::interrupt::InterruptX86;
+    use crate::machine::cpuarch;
     use crate::machine::cpuarch::CpuArch;
-    use crate::{reg_read,mem_write,mem_read_as_vec};
-    use num_traits::cast::*;
+    use crate::{reg_read,reg_write,mem_write,mem_read_as_vec};
+    use num_traits::cast::FromPrimitive;
 
-    pub const CODE_ADDR: u64 = 0x00400000;
-    pub const CODE_SIZE: u64 = 0x00100000;
-    pub const DATA_ADDR: u64 = CODE_ADDR + CODE_SIZE;
-    pub const DATA_SIZE: u64 = 0x00100000;
-    pub const STACK_ADDR: u64 = DATA_ADDR + DATA_SIZE;
-    pub const STACK_SIZE: u64 = 0x00100000;
-    pub const STACK_TOP:  u64 = STACK_ADDR + STACK_SIZE;
-    pub const WORD_SIZE: usize = 8;
+    thread_local!(
+        static CLOCK_MODE: RefCell<ClockMode> = RefCell::new(ClockMode::SystemClock);
+        static CLOCK_LAST: RefCell<Option<(i64,u32)>> = RefCell::new(None))
+    ;
 
-    #[derive(FromPrimitive, ToPrimitive)]
+    pub const CODE_ADDR:     u64 = 0x00400000;
+    pub const CODE_SIZE:     u64 = 0x00100000;
+    pub const DATA_ADDR:     u64 = CODE_ADDR + CODE_SIZE;
+    pub const DATA_SIZE:     u64 = 0x00100000;
+    pub const STACK_ADDR:    u64 = DATA_ADDR + DATA_SIZE;
+    pub const STACK_SIZE:    u64 = 0x00100000;
+    pub const STACK_TOP:     u64 = STACK_ADDR + STACK_SIZE;
+    pub const WORD_SIZE:   usize = 8;
+
+    #[derive(FromPrimitive,ToPrimitive)]
     enum Syscall {
         Write         =      1,
         Exit          =     60,
         GetTimeOfDay  =     96,
+        Time          =    201,
         Unknown       = 0xffff,
     }
 
     pub fn regs() -> Vec<Register> {
         super::regs_map().iter().filter(|(_,(set,flag))| *flag && set.contains(&CpuArch::X86_64)).map(|(reg,_)| *reg).collect()
+    }
+
+    pub fn get_clock_mode() -> ClockMode {
+        CLOCK_MODE.with(|clock_mode| {
+            *clock_mode.borrow()
+        })
+    }
+
+    pub fn set_clock_mode(mode: ClockMode) {
+        CLOCK_MODE.with(|clock_mode| {
+            *clock_mode.borrow_mut() = mode;
+        });
+    }
+
+    pub fn get_time() -> (i64,u32) {
+        let timeval = cpuarch::get_time(get_clock_mode());
+        CLOCK_LAST.with(|last| {
+            *last.borrow_mut() = Some(timeval);
+        });
+
+        timeval
+    }
+
+    pub fn get_last_time() -> Option<(i64,u32)> {
+        CLOCK_LAST.with(|last| {
+            *last.borrow()
+        })
     }
 
     pub fn hook_syscall(mut engine: unicorn::UnicornHandle) -> () {
@@ -317,27 +407,41 @@ pub mod x86_64 {
                 } else {
                     println!("SYS_WRITE: fd={}, @0x{:08x}, size = {}", reg_rdi, reg_rsi, reg_rdx);
                 }
+                let _ = reg_write!(engine, unicorn::RegisterX86::RAX as i32, reg_rdx);
+            },
+            Syscall::Time => {
+                let (secs,_) = get_time();
+                if reg_rdi != 0 {
+                    let bytes = secs.to_le_bytes();
+                    let _ = mem_write!(engine, reg_rdi, &bytes);
+                    println!("SYS_TIME: @0x{:08x}: {} (0x{:08x})", reg_rdi, secs, secs);
+                } else {
+                    println!("SYS_TIME: eax = {} (0x{:08x})", secs, secs);
+                }
+                let _ = reg_write!(engine, unicorn::RegisterX86::RAX as i32, u64::try_from(secs).unwrap_or(0));
             },
             Syscall::Exit => {
                 println!("SYS_EXIT: error code {}", reg_rdi);
                 let _ = engine.emu_stop();
             },
             Syscall::GetTimeOfDay => {
+                let mut error = false;
                 if reg_rdi != 0 {
-                    let (secs,subsecs) = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-                        Ok(d) => (d.as_secs(),d.subsec_micros()),
-                        _     => (0,0),
-                    };
-                    let bytes = [(secs as u64).to_le_bytes(), (subsecs as u64).to_le_bytes()].concat();
-                    let _ = mem_write!(engine, reg_rdi, &bytes);
+                    let (secs,subsecs) = get_time();
+                    let bytes = [secs.to_le_bytes(), (subsecs as u64).to_le_bytes()].concat();
+                    error |= mem_write!(engine, reg_rdi, &bytes).is_err();
                 }
                 let reg_rsi = reg_read!(engine, unicorn::RegisterX86::RSI as i32).unwrap_or(0);
                 if reg_rsi != 0 {
                     let tz_offset_min = (Local.timestamp(0, 0).offset().fix().local_minus_utc()/60) as i64;
                     let dst: u64 = 0;
                     let bytes = [tz_offset_min.to_le_bytes(), dst.to_le_bytes()].concat();
-                    let _ = mem_write!(engine, reg_rsi, &bytes);
+                    error |= mem_write!(engine, reg_rsi, &bytes).is_err();
                 }
+                let _ = reg_write!(engine,
+                                   unicorn::RegisterX86::RAX as i32,
+                                   match error {true => u64::MAX, false => 0}
+                );
             },
             _ => println!("SYSCALL: unknown id #{}", reg_rax),
         };
@@ -378,6 +482,58 @@ mod tests {
     }
 
     #[test]
+    fn test_time_x32() {
+        assert_eq!(x86_32::get_last_time(), None);
+        assert_eq!(x86_32::get_clock_mode(), ClockMode::SystemClock);
+
+        let timeval = (1_000_000_000, 500_000);
+
+        x86_32::set_clock_mode(ClockMode::Fixed(timeval));
+        assert_eq!(x86_32::get_clock_mode(), ClockMode::Fixed(timeval));
+        assert_eq!(x86_32::get_last_time(), None);
+
+        let timeval_ret = super::get_time(ClockMode::Fixed(timeval));
+        assert_eq!(timeval, timeval_ret);
+        assert_eq!(x86_32::get_last_time(), None);
+
+        let timeval_ret = x86_32::get_time();
+        assert_eq!(timeval, timeval_ret);
+        let timeval_ret = x86_32::get_last_time();
+        assert_eq!(Some(timeval), timeval_ret);
+
+        x86_32::set_clock_mode(ClockMode::SystemClock);
+        let timeval_ret1 = x86_32::get_time();
+        let timeval_ret2 = x86_32::get_last_time();
+        assert_eq!(Some(timeval_ret1), timeval_ret2);
+    }
+
+    #[test]
+    fn test_time_x64() {
+        assert_eq!(x86_64::get_last_time(), None);
+        assert_eq!(x86_64::get_clock_mode(), ClockMode::SystemClock);
+
+        let timeval = (1_000_000_000, 500_000);
+
+        x86_64::set_clock_mode(ClockMode::Fixed(timeval));
+        assert_eq!(x86_64::get_clock_mode(), ClockMode::Fixed(timeval));
+        assert_eq!(x86_64::get_last_time(), None);
+
+        let timeval_ret = super::get_time(ClockMode::Fixed(timeval));
+        assert_eq!(timeval, timeval_ret);
+        assert_eq!(x86_64::get_last_time(), None);
+
+        let timeval_ret = x86_64::get_time();
+        assert_eq!(timeval, timeval_ret);
+        let timeval_ret = x86_64::get_last_time();
+        assert_eq!(Some(timeval), timeval_ret);
+
+        x86_64::set_clock_mode(ClockMode::SystemClock);
+        let timeval_ret1 = x86_64::get_time();
+        let timeval_ret2 = x86_64::get_last_time();
+        assert_eq!(Some(timeval_ret1), timeval_ret2);
+    }
+
+    #[test]
     fn test_syscall_write_32() -> Result<()> {
         let cpu_context = CpuContext::new().arch(CpuArch::X86_32).build();
         let mut machine = Machine::new_from_context(&cpu_context)?;
@@ -400,8 +556,8 @@ mod tests {
             0x90,                         // nop
         ];
 
-        reg_write!(emu, unicorn::RegisterX86::EIP as i32, machine.code_addr)?;
         let s_addr = machine.code_addr;
+        reg_write!(emu, unicorn::RegisterX86::EIP as i32, s_addr)?;
         mem_write!(emu, s_addr, &x86_code)?;
         emu_start!(emu, 
             s_addr,
@@ -412,6 +568,9 @@ mod tests {
 
         let reg_eip = reg_read!(emu, unicorn::RegisterX86::EIP as i32)?;
         assert_eq!(s_addr+(x86_code.len() as u64), reg_eip);
+
+        let reg_eax = reg_read!(emu, unicorn::RegisterX86::EAX as i32)?;
+        assert_eq!(12, reg_eax);
 
         Ok(())
     }
@@ -438,8 +597,8 @@ mod tests {
             0x90,                         // nop
         ];
 
-        reg_write!(emu, unicorn::RegisterX86::RIP as i32, machine.code_addr)?;
         let s_addr = machine.code_addr;
+        reg_write!(emu, unicorn::RegisterX86::RIP as i32, s_addr)?;
         mem_write!(emu, s_addr, &x86_code)?;
         emu_start!(emu, 
             s_addr,
@@ -450,6 +609,9 @@ mod tests {
 
         let reg_rip = reg_read!(emu, unicorn::RegisterX86::RIP as i32)?;
         assert_eq!(s_addr+(x86_code.len() as u64), reg_rip);
+
+        let reg_rax = reg_read!(emu, unicorn::RegisterX86::RAX as i32)?;
+        assert_eq!(12, reg_rax);
 
         Ok(())
     }
@@ -481,8 +643,8 @@ mod tests {
             0x90,                         // nop
         ];
 
-        reg_write!(emu, unicorn::RegisterX86::EIP as i32, machine.code_addr)?;
         let s_addr = machine.code_addr;
+        reg_write!(emu, unicorn::RegisterX86::EIP as i32, s_addr)?;
         mem_write!(emu, s_addr, &x86_code_1)?;
         mem_write!(emu, s_addr+(x86_code_1.len() as u64), &x86_code_2)?;
         emu_start!(emu, 
@@ -530,8 +692,8 @@ mod tests {
             0x90,                         // nop
         ];
 
-        reg_write!(emu, unicorn::RegisterX86::RIP as i32, machine.code_addr)?;
         let s_addr = machine.code_addr;
+        reg_write!(emu, unicorn::RegisterX86::RIP as i32, s_addr)?;
         mem_write!(emu, s_addr, &x86_code_1)?;
         mem_write!(emu, s_addr+(x86_code_1.len() as u64), &x86_code_2)?;
         emu_start!(emu, 
@@ -551,4 +713,173 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_syscall_time_x32() -> Result<()> {
+        let cpu_context = CpuContext::new().arch(CpuArch::X86_32).build();
+        let mut machine = Machine::new_from_context(&cpu_context)?;
+        let mut emu = machine.unicorn.borrow();
+
+        let x86_code: Vec<u8> = vec![
+            0xb8, 0x0d, 0x00, 0x00, 0x00, // mov eax,13
+            0x89, 0xfb,                   // mov ebx,edi
+            0xcd, 0x80,                   // int 0x80
+            0x8b, 0x1f,                   // mov ebx,[edi]
+            0x90,                         // nop
+        ];
+
+        let timeval = (1_500_000_000, 123_456);
+        x86_32::set_clock_mode(ClockMode::Fixed(timeval));
+
+        let s_addr = machine.code_addr;
+        reg_write!(emu, unicorn::RegisterX86::EIP as i32, s_addr)?;
+        mem_write!(emu, s_addr, &x86_code)?;
+        emu_start!(emu, 
+            s_addr,
+            s_addr + x86_code.len() as u64,
+            10 * SECOND_SCALE,
+            1000
+        )?;
+
+        let reg_eip = reg_read!(emu, unicorn::RegisterX86::EIP as i32)?;
+        assert_eq!(s_addr+(x86_code.len() as u64), reg_eip);
+
+        let reg_eax = reg_read!(emu, unicorn::RegisterX86::EAX as i32)?;
+        assert_eq!(timeval.0, reg_eax as i64);
+
+        let addr = machine.data_addr;
+        let mem_data = mem_read_as_vec!(emu, addr, 4)?;
+        assert_eq!((timeval.0 as u32).to_le_bytes(), &mem_data[..]);
+
+        let reg_ebx = reg_read!(emu, unicorn::RegisterX86::EBX as i32)?;
+        assert_eq!(timeval.0 as u64, reg_ebx);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_syscall_time_x64() -> Result<()> {
+        let cpu_context = CpuContext::new().arch(CpuArch::X86_64).build();
+        let mut machine = Machine::new_from_context(&cpu_context)?;
+        let mut emu = machine.unicorn.borrow();
+
+        let x86_code: Vec<u8> = vec![
+            0xb8, 0xc9, 0x00, 0x00, 0x00, // mov eax,201
+            0x0f, 0x05,                   // syscall
+            0x48, 0x8b, 0x1f,             // mov rbx,[rdi]
+            0x90,                         // nop
+        ];
+
+        let timeval = (1_500_000_000, 123_456);
+        x86_64::set_clock_mode(ClockMode::Fixed(timeval));
+
+        let s_addr = machine.code_addr;
+        reg_write!(emu, unicorn::RegisterX86::RIP as i32, s_addr)?;
+        mem_write!(emu, s_addr, &x86_code)?;
+        emu_start!(emu, 
+            s_addr,
+            s_addr + x86_code.len() as u64,
+            10 * SECOND_SCALE,
+            1000
+        )?;
+
+        let reg_rip = reg_read!(emu, unicorn::RegisterX86::RIP as i32)?;
+        assert_eq!(s_addr+(x86_code.len() as u64), reg_rip);
+
+        let reg_rax = reg_read!(emu, unicorn::RegisterX86::RAX as i32)?;
+        assert_eq!(timeval.0, reg_rax as i64);
+
+        let addr = machine.data_addr;
+        let mem_data = mem_read_as_vec!(emu, addr, 8)?;
+        assert_eq!(timeval.0.to_le_bytes(), &mem_data[..]);
+
+        let reg_rbx = reg_read!(emu, unicorn::RegisterX86::RBX as i32)?;
+        assert_eq!(timeval.0 as u64, reg_rbx);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_syscall_gettimeofday_x32() -> Result<()> {
+        let cpu_context = CpuContext::new().arch(CpuArch::X86_32).build();
+        let mut machine = Machine::new_from_context(&cpu_context)?;
+        let mut emu = machine.unicorn.borrow();
+
+        let x86_code: Vec<u8> = vec![
+            0xb8, 0x4e, 0x00, 0x00, 0x00, // mov eax,78
+            0x89, 0xfb,                   // mov ebx,edi
+            0x8d, 0x4f, 0x08,             // lea ecx,[edi+8]
+            0xcd, 0x80,                   // int 0x80
+            0x8b, 0x07,                   // mov eax,[edi]
+            0x8b, 0x5f, 0x04,             // mov ebx,[edi+4]  
+            0x8b, 0x09,                   // mov ecx,[ecx]
+            0x90,                         // nop
+        ];
+
+        let timeval = (1_500_000_000, 123_456);
+        x86_32::set_clock_mode(ClockMode::Fixed(timeval));
+
+        let s_addr = machine.code_addr;
+        reg_write!(emu, unicorn::RegisterX86::EIP as i32, s_addr)?;
+        mem_write!(emu, s_addr, &x86_code)?;
+        emu_start!(emu, 
+            s_addr,
+            s_addr + x86_code.len() as u64,
+            10 * SECOND_SCALE,
+            1000
+        )?;
+
+        let reg_eip = reg_read!(emu, unicorn::RegisterX86::EIP as i32)?;
+        assert_eq!(s_addr+(x86_code.len() as u64), reg_eip);
+
+        let reg_eax = reg_read!(emu, unicorn::RegisterX86::EAX as i32)?;
+        assert_eq!(timeval.0, reg_eax as i64);
+
+        let reg_ebx = reg_read!(emu, unicorn::RegisterX86::EBX as i32)?;
+        assert_eq!(timeval.1 as u64, reg_ebx);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_syscall_gettimeofday_x64() -> Result<()> {
+        let cpu_context = CpuContext::new().arch(CpuArch::X86_64).build();
+        let mut machine = Machine::new_from_context(&cpu_context)?;
+        let mut emu = machine.unicorn.borrow();
+
+        let x86_code: Vec<u8> = vec![
+            0xb8, 0x60, 0x00, 0x00, 0x00, // mov eax,96
+            0x48, 0x8d, 0x77, 0x10,       // lea rsi,[rdi+16]
+            0x0f, 0x05,                   // syscall
+            0x48, 0x8b, 0x07,             // mov rax,[rdi]
+            0x48, 0x8b, 0x5f, 0x08,       // mov rbx,[rdi+8]  
+            0x48, 0x8b, 0x0e,             // mov rcx,[rsi]
+            0x90,                         // nop
+        ];
+
+        let timeval = (1_500_000_000, 123_456);
+        x86_64::set_clock_mode(ClockMode::Fixed(timeval));
+
+        let s_addr = machine.code_addr;
+        reg_write!(emu, unicorn::RegisterX86::RIP as i32, s_addr)?;
+        mem_write!(emu, s_addr, &x86_code)?;
+        emu_start!(emu, 
+            s_addr,
+            s_addr + x86_code.len() as u64,
+            10 * SECOND_SCALE,
+            1000
+        )?;
+
+        let reg_rip = reg_read!(emu, unicorn::RegisterX86::RIP as i32)?;
+        assert_eq!(s_addr+(x86_code.len() as u64), reg_rip);
+
+        let reg_rax = reg_read!(emu, unicorn::RegisterX86::RAX as i32)?;
+        assert_eq!(timeval.0, reg_rax as i64);
+
+        let reg_rbx = reg_read!(emu, unicorn::RegisterX86::RBX as i32)?;
+        assert_eq!(timeval.1 as u64, reg_rbx);
+
+        Ok(())
+    }
+
 }
