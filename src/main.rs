@@ -21,9 +21,9 @@ pub mod machine;
 pub mod parser;
 pub mod lexer;
 
-use machine::interface::Machine;
+use machine::interface::{Machine,ExecutionError};
 use machine::context::CpuContext;
-use machine::cpuarch::{CpuArch,ClockMode,x86_32,x86_64};
+use machine::cpuarch::{CpuArch,ClockMode,Register,x86_32,x86_64};
 use parser::Parser;
 use parser::Command;
 use parser::ParseError;
@@ -55,6 +55,32 @@ struct Options {
     ticks: Option<i64>,    
 }
 
+fn command_print(m: &mut Machine, parser: &mut Parser, params: &Vec<Token>) -> anyhow::Result<()> {
+    for param in params {
+        match param {
+            Token::Register(name) => {
+                let reg = Register::from(name.as_str());
+                let emu = m.unicorn.borrow();
+                let reg_val = reg_read!(emu, i32::from(reg))?;
+                let index = parser.add_value(reg_val as i64);
+                print!("${} => {} = ", index, reg.to_string());
+                match reg.size() {
+                    1 => print!("{:#04x} {:+}", reg_val, reg_val as i8),
+                    2 => print!("{:#06x} {:+}", reg_val, reg_val as i16),
+                    4 => print!("{:#010x} {:+}", reg_val, reg_val as i32),
+                    _ => print!("{:#018x} {:+}", reg_val, reg_val as i64),
+                }
+                println!(" {}u", reg_val);
+            },
+            Token::Integer(value) => {
+                let index = parser.add_value(*value);
+                println!("${} => {:#04x} {}", index, *value, *value);
+            },
+            _ => {},
+        };
+    }
+    Ok(())
+}
 
 fn command_define(parser: &mut Parser, params: &Vec<Token>) -> anyhow::Result<()> {
     if params.len() == 0 {
@@ -80,7 +106,6 @@ fn command_eval(parser: &mut Parser, params: &Vec<Token>) -> anyhow::Result<()> 
     }
     Ok(())
 }
-
 
 fn execute_asm(m: &mut Machine, parser: &mut Parser, line: &str) -> anyhow::Result<()> {
     let parsed_line = parser.parse_asm(&line)?;
@@ -124,6 +149,7 @@ fn run_interactive(m: &mut Machine, parser: &mut Parser) -> anyhow::Result<()> {
                             Command::Quit      => { break; },
                             Command::Eval      => command_eval(parser, &params),
                             Command::Define    => command_define(parser, &params),
+                            Command::Print     => command_print(m, parser, &params),
                             _                  => { Ok(())}, 
                         }
                     },

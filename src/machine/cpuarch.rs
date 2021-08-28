@@ -27,39 +27,59 @@ impl Default for CpuArch {
 
 fn regs_map() -> IndexMap<Register,(HashSet<CpuArch>,bool)> {
     indexmap![
-        Register{0: unicorn::RegisterX86::EAX}      => (hashset!{CpuArch::X86_32},true),
-        Register{0: unicorn::RegisterX86::EBX}      => (hashset!{CpuArch::X86_32},true),
-        Register{0: unicorn::RegisterX86::ECX}      => (hashset!{CpuArch::X86_32},true),
-        Register{0: unicorn::RegisterX86::EDX}      => (hashset!{CpuArch::X86_32},true),
-        Register{0: unicorn::RegisterX86::ESI}      => (hashset!{CpuArch::X86_32},true),
-        Register{0: unicorn::RegisterX86::EDI}      => (hashset!{CpuArch::X86_32},true),
-        Register{0: unicorn::RegisterX86::EIP}      => (hashset!{CpuArch::X86_32},true),
-        Register{0: unicorn::RegisterX86::EBP}      => (hashset!{CpuArch::X86_32},true),
-        Register{0: unicorn::RegisterX86::ESP}      => (hashset!{CpuArch::X86_32},true),
-        Register{0: unicorn::RegisterX86::RAX}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::RBX}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::RCX}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::RDX}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::RSI}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::RDI}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::R8}       => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::R9}       => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::R10}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::R11}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::R12}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::R13}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::R14}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::R15}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::RIP}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::RBP}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::RSP}      => (hashset!{CpuArch::X86_64},true),
-        Register{0: unicorn::RegisterX86::EFLAGS}   => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
-        Register{0: unicorn::RegisterX86::CS}       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
-        Register{0: unicorn::RegisterX86::SS}       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
-        Register{0: unicorn::RegisterX86::DS}       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
-        Register{0: unicorn::RegisterX86::ES}       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
-        Register{0: unicorn::RegisterX86::FS}       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
-        Register{0: unicorn::RegisterX86::GS}       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::EAX      => (hashset!{CpuArch::X86_32},true),
+        x86_32::EBX      => (hashset!{CpuArch::X86_32},true),
+        x86_32::ECX      => (hashset!{CpuArch::X86_32},true),
+        x86_32::EDX      => (hashset!{CpuArch::X86_32},true),
+        x86_32::ESI      => (hashset!{CpuArch::X86_32},true),
+        x86_32::EDI      => (hashset!{CpuArch::X86_32},true),
+        x86_32::EIP      => (hashset!{CpuArch::X86_32},true),
+        x86_32::EBP      => (hashset!{CpuArch::X86_32},true),
+        x86_32::ESP      => (hashset!{CpuArch::X86_32},true),
+        x86_64::RAX      => (hashset!{CpuArch::X86_64},true),
+        x86_64::RBX      => (hashset!{CpuArch::X86_64},true),
+        x86_64::RCX      => (hashset!{CpuArch::X86_64},true),
+        x86_64::RDX      => (hashset!{CpuArch::X86_64},true),
+        x86_64::RSI      => (hashset!{CpuArch::X86_64},true),
+        x86_64::RDI      => (hashset!{CpuArch::X86_64},true),
+        x86_64::R8       => (hashset!{CpuArch::X86_64},true),
+        x86_64::R9       => (hashset!{CpuArch::X86_64},true),
+        x86_64::R10      => (hashset!{CpuArch::X86_64},true),
+        x86_64::R11      => (hashset!{CpuArch::X86_64},true),
+        x86_64::R12      => (hashset!{CpuArch::X86_64},true),
+        x86_64::R13      => (hashset!{CpuArch::X86_64},true),
+        x86_64::R14      => (hashset!{CpuArch::X86_64},true),
+        x86_64::R15      => (hashset!{CpuArch::X86_64},true),
+        x86_64::RIP      => (hashset!{CpuArch::X86_64},true),
+        x86_64::RBP      => (hashset!{CpuArch::X86_64},true),
+        x86_64::RSP      => (hashset!{CpuArch::X86_64},true),
+        x86_32::EFLAGS   => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::CS       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::SS       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::DS       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::ES       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::FS       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::GS       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::AL       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::AH       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::AX       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::BL       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::BH       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::BX       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::CL       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::CH       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::CX       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::DL       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::DH       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::DX       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::SI       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::SIL      => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::DI       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::DIL      => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::BP       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::BPL      => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::SP       => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
+        x86_32::SPL      => (hashset!{CpuArch::X86_32,CpuArch::X86_64},false),
     ]
 }
 
@@ -72,7 +92,17 @@ pub fn regs(arch: CpuArch) -> Vec<Register> {
 }
 
 #[derive(Copy,Clone)]
-pub struct Register(pub unicorn::RegisterX86);
+pub struct Register(pub unicorn::RegisterX86, pub usize);
+
+impl Register {
+    pub fn id(&self) -> i32 {
+        self.0 as i32
+    }
+
+    pub fn size(&self) -> usize {
+        self.1
+    }
+}
 
 impl From<Register> for i32 {
     fn from(reg: Register) -> Self {
@@ -82,9 +112,9 @@ impl From<Register> for i32 {
 
 impl From<&str> for Register {
     fn from(s: &str) -> Self {
-        let mut result = Register{0: unicorn::RegisterX86::INVALID};
+        let mut result = Register{0: unicorn::RegisterX86::INVALID, 1: 0};
         for reg in all_regs() {
-            if reg.to_string() == s {
+            if reg.to_string() == s.to_uppercase() {
                 result = reg;
                 break;
             }
@@ -215,6 +245,46 @@ pub mod x86_32 {
     pub const STACK_ADDR:    u64 = STACK_TOP - STACK_SIZE;
     pub const WORD_SIZE:   usize = 4;
     pub const LINUX_SYSCALL: u32 = 0x80;
+
+    pub const AL: Register  =  Register{0: unicorn::RegisterX86::AL, 1: 1};
+    pub const AH: Register  =  Register{0: unicorn::RegisterX86::AH, 1: 1};
+    pub const AX: Register  =  Register{0: unicorn::RegisterX86::AX, 1: 2};
+    pub const BL: Register  =  Register{0: unicorn::RegisterX86::BL, 1: 1};
+    pub const BH: Register  =  Register{0: unicorn::RegisterX86::BH, 1: 1};
+    pub const BX: Register  =  Register{0: unicorn::RegisterX86::BX, 1: 2};
+    pub const CL: Register  =  Register{0: unicorn::RegisterX86::CL, 1: 1};
+    pub const CH: Register  =  Register{0: unicorn::RegisterX86::CH, 1: 1};
+    pub const CX: Register  =  Register{0: unicorn::RegisterX86::CX, 1: 2};
+    pub const DL: Register  =  Register{0: unicorn::RegisterX86::DL, 1: 1};
+    pub const DH: Register  =  Register{0: unicorn::RegisterX86::DH, 1: 1};
+    pub const DX: Register  =  Register{0: unicorn::RegisterX86::DX, 1: 2};
+    pub const SI: Register  =  Register{0: unicorn::RegisterX86::SI, 1: 2};
+    pub const SIL: Register =  Register{0: unicorn::RegisterX86::SIL, 1: 1};
+    pub const DI: Register  =  Register{0: unicorn::RegisterX86::DI, 1: 2};
+    pub const DIL: Register =  Register{0: unicorn::RegisterX86::DIL, 1: 1};
+    pub const BP: Register  =  Register{0: unicorn::RegisterX86::BP, 1: 2};
+    pub const BPL: Register =  Register{0: unicorn::RegisterX86::BPL, 1: 1};
+    pub const SP: Register  =  Register{0: unicorn::RegisterX86::SP, 1: 2};
+    pub const SPL: Register =  Register{0: unicorn::RegisterX86::SPL, 1: 1};
+
+    pub const CS: Register  =  Register{0: unicorn::RegisterX86::CS, 1: 2};
+    pub const SS: Register  =  Register{0: unicorn::RegisterX86::SS, 1: 2};
+    pub const DS: Register  =  Register{0: unicorn::RegisterX86::DS, 1: 2};
+    pub const ES: Register  =  Register{0: unicorn::RegisterX86::ES, 1: 2};
+    pub const FS: Register  =  Register{0: unicorn::RegisterX86::FS, 1: 2};
+    pub const GS: Register  =  Register{0: unicorn::RegisterX86::GS, 1: 2};
+
+    pub const EFLAGS: Register  =  Register{0: unicorn::RegisterX86::EFLAGS, 1: 4};
+
+    pub const EAX: Register =  Register{0: unicorn::RegisterX86::EAX, 1: 4};
+    pub const EBX: Register =  Register{0: unicorn::RegisterX86::EBX, 1: 4};
+    pub const ECX: Register =  Register{0: unicorn::RegisterX86::ECX, 1: 4};
+    pub const EDX: Register =  Register{0: unicorn::RegisterX86::EDX, 1: 4};
+    pub const EIP: Register =  Register{0: unicorn::RegisterX86::EIP, 1: 4};
+    pub const EBP: Register =  Register{0: unicorn::RegisterX86::EBP, 1: 4};
+    pub const ESP: Register =  Register{0: unicorn::RegisterX86::ESP, 1: 4};
+    pub const EDI: Register =  Register{0: unicorn::RegisterX86::EDI, 1: 4};
+    pub const ESI: Register =  Register{0: unicorn::RegisterX86::ESI, 1: 4};
 
     #[derive(FromPrimitive,ToPrimitive)]
     enum Syscall {
@@ -350,6 +420,24 @@ pub mod x86_64 {
     pub const STACK_SIZE:    u64 = 0x00100000;
     pub const STACK_TOP:     u64 = STACK_ADDR + STACK_SIZE;
     pub const WORD_SIZE:   usize = 8;
+
+    pub const RAX: Register =  Register{0: unicorn::RegisterX86::RAX, 1: 8};
+    pub const RBX: Register =  Register{0: unicorn::RegisterX86::RBX, 1: 8};
+    pub const RCX: Register =  Register{0: unicorn::RegisterX86::RCX, 1: 8};
+    pub const RDX: Register =  Register{0: unicorn::RegisterX86::RDX, 1: 8};
+    pub const RIP: Register =  Register{0: unicorn::RegisterX86::RIP, 1: 8};
+    pub const RBP: Register =  Register{0: unicorn::RegisterX86::RBP, 1: 8};
+    pub const RSP: Register =  Register{0: unicorn::RegisterX86::RSP, 1: 8};
+    pub const RDI: Register =  Register{0: unicorn::RegisterX86::RDI, 1: 8};
+    pub const RSI: Register =  Register{0: unicorn::RegisterX86::RSI, 1: 8};
+    pub const R8: Register  =  Register{0: unicorn::RegisterX86::R8, 1: 8};
+    pub const R9: Register  =  Register{0: unicorn::RegisterX86::R9, 1: 8};
+    pub const R10: Register =  Register{0: unicorn::RegisterX86::R10, 1: 8};
+    pub const R11: Register =  Register{0: unicorn::RegisterX86::R11, 1: 8};
+    pub const R12: Register =  Register{0: unicorn::RegisterX86::R12, 1: 8};
+    pub const R13: Register =  Register{0: unicorn::RegisterX86::R13, 1: 8};
+    pub const R14: Register =  Register{0: unicorn::RegisterX86::R14, 1: 8};
+    pub const R15: Register =  Register{0: unicorn::RegisterX86::R15, 1: 8};
 
     #[derive(FromPrimitive,ToPrimitive)]
     enum Syscall {

@@ -237,19 +237,19 @@ impl CpuContextBuilder {
                 for reg in x86_32::regs() {
                     cpu_context.regs_values.insert(reg, 0u64);
                 }
-                cpu_context.regs_values.insert(Register{0: unicorn::RegisterX86::ESP}, self.stack_addr + self.stack_size);
-                cpu_context.regs_values.insert(Register{0: unicorn::RegisterX86::EBP}, self.stack_addr);
-                cpu_context.regs_values.insert(Register{0: unicorn::RegisterX86::EDI}, self.data_addr);
-                cpu_context.regs_values.insert(Register{0: unicorn::RegisterX86::ESI}, self.data_addr);
+                cpu_context.regs_values.insert(x86_32::ESP, self.stack_addr + self.stack_size);
+                cpu_context.regs_values.insert(x86_32::EBP, self.stack_addr);
+                cpu_context.regs_values.insert(x86_32::EDI, self.data_addr);
+                cpu_context.regs_values.insert(x86_32::ESI, self.data_addr);
             },
             CpuArch::X86_64 => {
                 for reg in x86_64::regs() {
                     cpu_context.regs_values.insert(reg, 0u64);
                 }
-                cpu_context.regs_values.insert(Register{0: unicorn::RegisterX86::RSP}, self.stack_addr + self.stack_size);
-                cpu_context.regs_values.insert(Register{0: unicorn::RegisterX86::RBP}, self.stack_addr);
-                cpu_context.regs_values.insert(Register{0: unicorn::RegisterX86::RDI}, self.data_addr);
-                cpu_context.regs_values.insert(Register{0: unicorn::RegisterX86::RSI}, self.data_addr);
+                cpu_context.regs_values.insert(x86_64::RSP, self.stack_addr + self.stack_size);
+                cpu_context.regs_values.insert(x86_64::RBP, self.stack_addr);
+                cpu_context.regs_values.insert(x86_64::RDI, self.data_addr);
+                cpu_context.regs_values.insert(x86_64::RSI, self.data_addr);
             },
         }
 
@@ -434,17 +434,17 @@ mod tests {
     }
 
     fn create_cpu_context_x32_a() -> CpuContext {
-        let regs_values: HashMap<Register, u64> = [ 
-            (unicorn::RegisterX86::EAX,   255),
-            (unicorn::RegisterX86::EBP, 12288),
-            (unicorn::RegisterX86::EBX,  4660),
-            (unicorn::RegisterX86::ECX,     0),
-            (unicorn::RegisterX86::EDI,  8192),
-            (unicorn::RegisterX86::EDX, 12345),
-            (unicorn::RegisterX86::EIP,  4113),
-            (unicorn::RegisterX86::ESI,  8192),
-            (unicorn::RegisterX86::ESP, 16384),
-        ].iter().map(|(reg,val)| { (Register {0: *reg}, *val) }).collect::<HashMap<_, _>>();
+        let regs_values: HashMap<Register, u64> = hashmap![ 
+            x86_32::EAX =>   255,
+            x86_32::EBP => 12288,
+            x86_32::EBX =>  4660,
+            x86_32::ECX =>     0,
+            x86_32::EDI =>  8192,
+            x86_32::EDX => 12345,
+            x86_32::EIP =>  4113,
+            x86_32::ESI =>  8192,
+            x86_32::ESP => 16384,
+        ];
 
         let memory: HashMap<u64, Vec<u8>> = hashmap![
             4096 => vec![176,255,102,187,52,18,102,186,57,48,102,137,23,102,137,95,16],
@@ -466,25 +466,25 @@ mod tests {
     }
 
     fn create_cpu_context_x64_a() -> CpuContext {
-        let regs_values: HashMap<Register, u64> = [ 
-            (unicorn::RegisterX86::RAX,   255),
-            (unicorn::RegisterX86::RBP, 12288),
-            (unicorn::RegisterX86::RBX,  4660),
-            (unicorn::RegisterX86::RCX,     0),
-            (unicorn::RegisterX86::RDI,  8192),
-            (unicorn::RegisterX86::RDX, 12345),
-            (unicorn::RegisterX86::RIP,  4113),
-            (unicorn::RegisterX86::RSI,  8192),
-            (unicorn::RegisterX86::RSP, 16384),
-            (unicorn::RegisterX86::R8,      0),
-            (unicorn::RegisterX86::R9,      0),
-            (unicorn::RegisterX86::R10,     0),
-            (unicorn::RegisterX86::R11,     0),
-            (unicorn::RegisterX86::R12,     0),
-            (unicorn::RegisterX86::R13,     0),
-            (unicorn::RegisterX86::R14,     0),
-            (unicorn::RegisterX86::R15,     0),
-        ].iter().map(|(reg,val)| { (Register {0: *reg}, *val) }).collect::<HashMap<_, _>>();
+        let regs_values: HashMap<Register, u64> = hashmap![ 
+            x86_64::RAX =>   255,
+            x86_64::RBP => 12288,
+            x86_64::RBX =>  4660,
+            x86_64::RCX =>     0,
+            x86_64::RDI =>  8192,
+            x86_64::RDX => 12345,
+            x86_64::RIP =>  4113,
+            x86_64::RSI =>  8192,
+            x86_64::RSP => 16384,
+            x86_64::R8  =>     0,
+            x86_64::R9  =>     0,
+            x86_64::R10 =>     0,
+            x86_64::R11 =>     0,
+            x86_64::R12 =>     0,
+            x86_64::R13 =>     0,
+            x86_64::R14 =>     0,
+            x86_64::R15 =>     0,
+        ];
 
         let memory: HashMap<u64, Vec<u8>> = hashmap![
             4096 => vec![176,255,102,187,52,18,102,186,57,48,102,137,23,102,137,95,16],

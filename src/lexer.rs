@@ -17,6 +17,7 @@ pub enum Token {
     Operator(Opcode),
     Integer(i64),
     Identifier(String),
+    Register(String),
     Constant(String),
     ValueHistory(Option<usize>),
     Char(char),
@@ -52,6 +53,7 @@ impl fmt::Display for Token {
             Token::Operator(code) => write!(f, "{}", code),
             Token::Integer(v) => write!(f, "{}", v),
             Token::Identifier(s) => write!(f, "{}", s.to_string()),
+            Token::Register(s) => write!(f, "{}", s.to_string()),
             Token::Constant(s) => write!(f, "{}", s.to_string()),
             Token::ValueHistory(idx) => write!(f, "{:?}", idx),
             Token::Char(ch) => write!(f, "'{}'", ch),
@@ -174,8 +176,8 @@ impl Lexer {
 
     fn scan_literal(input: &str) -> IResult<&str, &str> {
         let (rest, s) = recognize(pair(
-            one_of("abcdefghijklmnopqrstuvwxyz_"),
-            many0(one_of("abcdefghijklmnopqrstuvwxyz_0123456789._"))
+            one_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"),
+            many0(one_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789._"))
         ))(input)?;
         Ok((rest, s))
     }
@@ -190,6 +192,15 @@ impl Lexer {
             Lexer::scan_literal
             ),
             |s: &str| Token::Constant(s.to_string())
+        )(input)
+    }
+
+    fn scan_register(input: &str) -> IResult<&str, Token> {
+        map(preceded(
+            char('%'),
+            Lexer::scan_literal
+            ),
+            |s: &str| Token::Register(s.to_string())
         )(input)
     }
 
@@ -220,6 +231,7 @@ impl Lexer {
                 Lexer::scan_integer_dec_neg,
                 Lexer::scan_constant,
                 Lexer::scan_identifier,
+                Lexer::scan_register,
                 Lexer::scan_value_history,
                 Lexer::scan_escaped_char,
                 Lexer::scan_other,

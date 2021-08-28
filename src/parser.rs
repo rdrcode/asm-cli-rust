@@ -4,7 +4,6 @@ use std::str;
 use std::fmt;
 use std::fmt::Debug;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use thiserror::Error;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -83,7 +82,6 @@ pub struct Parser {
     constants:  HashMap<String,i64>,
     commands:   HashMap<String,Command>,
     values:     Vec<i64>,
-    reg_names:  HashSet<Register>,
 }
 
 
@@ -96,7 +94,6 @@ impl Parser {
                 .map(|cmd| { (cmd.to_string().to_lowercase(), cmd) })
                 .collect::<HashMap<_, _>>(),
             values: Vec::<i64>::new(),
-            reg_names: HashSet::new(),
         }
     }
 
@@ -177,11 +174,6 @@ impl Parser {
                     } else {
                         return Err(ParseError::RangeError);
                     }
-                },
-                Token::Identifier(s) => {
-                    if let Some(reg) = self.reg_names.get(&Register::from(s.to_uppercase().as_str())) {
-                    }
-                    resolved_tokens.push(token.clone());
                 },
                 _ => {
                     resolved_tokens.push(token.clone());
@@ -303,18 +295,12 @@ impl Parser {
         Ok(output.join(""))
     }
 
-    pub fn set_reg_names(&mut self, regs: &Vec<Register>) {
-        for reg in regs {
-            self.reg_names.insert(*reg);
-        }
-    }
 }
 
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::cpuarch::x86_32;
 
     #[test]
     fn test_value_history() {
@@ -413,7 +399,6 @@ mod tests {
         assert_eq!(parser.parse_cmd("no command").is_none(), true);
         assert_eq!(parser.parse_cmd("mov eax,1000").is_none(), true);
 
-        parser.set_reg_names(&x86_32::regs());
         parser.define_constant("offset", 0x10000);
 
         let pairs: Vec<(&str, Result<(Command,Vec<Token>),ParseError>)> = vec![
