@@ -80,6 +80,7 @@ pub enum Parameter<T> {
 #[derive(Debug)]
 pub struct Parser {
     constants:  HashMap<String,i64>,
+    #[allow(dead_code)]
     commands:   HashMap<String,Command>,
     values:     Vec<i64>,
 }

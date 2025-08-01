@@ -4,7 +4,7 @@ macro_rules! emu_start {
         $emu.emu_start($s_addr, $e_addr, $dur, $num)
             .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
                 .context(format!("Failure to start emulator at 0x{:08x}: {:?}", $s_addr, err))
-            );
+            )
     };
 }
 
@@ -14,7 +14,7 @@ macro_rules! mem_map {
         $emu.mem_map($addr, $size, $perm)
             .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
                 .context(format!("Failure to map memory at 0x{:08x}: {:?}", $addr, err))
-            );
+            )
     };
 }
 
@@ -24,7 +24,7 @@ macro_rules! mem_unmap {
         $emu.mem_unmap($addr, $size)
             .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
                 .context(format!("Failure to unmap memory at 0x{:08x}: {:?}", $addr, err))
-            );
+            )
     };
 }
 
@@ -34,7 +34,7 @@ macro_rules! mem_regions {
         $emu.mem_regions()
             .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
                 .context(format!("Failure to list memory regions: {:?}", err))
-            );
+            )
     };
 }
 
@@ -44,7 +44,7 @@ macro_rules! mem_write {
         $emu.mem_write($addr, $bytes)
             .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
                 .context(format!("Failure to write to memory at 0x{:08x}: {:?}", $addr, err))
-            );
+            )
     };
 }
 
@@ -54,7 +54,7 @@ macro_rules! mem_read_as_vec {
         $emu.mem_read_as_vec($addr, $size)
             .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
                 .context(format!("Failure to read vec from memory at 0x{:08x}: {:?}", $addr, err))
-            );
+            )
     };
 }    
 
@@ -64,7 +64,7 @@ macro_rules! reg_write {
         $emu.reg_write($reg, $val)
             .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
                 .context(format!("Failure to write to register {}: {:?}", $reg, err))
-            );
+            )
     };
 }    
 
@@ -74,7 +74,7 @@ macro_rules! reg_read {
         $emu.reg_read($reg)
             .map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
                 .context(format!("Failure to read from register {}: {:?}", $reg, err))
-            );
+            )
     };
 }    
 
