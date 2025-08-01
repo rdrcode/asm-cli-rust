@@ -12,7 +12,7 @@ use rustyline::config::Builder;
 use ansi_term::Colour::Red;
 use ansi_term::Colour::Green;
 use ansi_term::Colour::Yellow;
-use structopt::StructOpt;
+use clap::Parser;
 use anyhow::{Context, Result};
 
 pub mod hexprint;
@@ -24,43 +24,43 @@ pub mod lexer;
 use machine::interface::{Machine,ExecutionError};
 use machine::context::CpuContext;
 use machine::cpuarch::{CpuArch,ClockMode,Register,x86_32,x86_64};
-use parser::Parser;
+use parser::Parser as AsmParser;
 use parser::Command;
 use parser::ParseError;
 use crate::lexer::Token;
 //use crate::ok_or_error;
 
 
-#[derive(Debug, StructOpt)]
-#[structopt(name = "rudi", about = "rudi- RUst Debugger Interactive")]
+#[derive(Debug, Parser)]
+#[command(name = "rudi", about = "rudi- RUst Debugger Interactive")]
 struct Options {
     /// Execute instructions in batch execution mode
-    #[structopt(short, long)]
+    #[arg(short, long)]
     batch: Option<String>,
 
     /// File from which to read initial cpu context
-    #[structopt(short, long, parse(from_os_str))]
+    #[arg(short, long)]
     context: Option<PathBuf>,
 
     /// File where to save cpu context before exit 
-    #[structopt(short, long, parse(from_os_str))]
+    #[arg(short, long)]
     save: Option<PathBuf>,
     
     /// Select processor architecture
-    #[structopt(long, possible_values = &CpuArch::variants(), case_insensitive = true, default_value = "X86_32")]
+    #[arg(long, value_enum, default_value = "x86-32")]
     arch: CpuArch,
 
     /// Define fixed timestamp (ticks) to be returned by gettimeofday and time system calls
-    #[structopt(long)]
+    #[arg(long)]
     ticks: Option<i64>,    
 }
 
-fn command_print(m: &mut Machine, parser: &mut Parser, params: &Vec<Token>) -> anyhow::Result<()> {
+fn command_print(m: &mut Machine, parser: &mut AsmParser, params: &Vec<Token>) -> anyhow::Result<()> {
     for param in params {
         match param {
             Token::Register(name) => {
                 let reg = Register::from(name.as_str());
-                let emu = m.unicorn.borrow();
+                let emu = &mut m.unicorn;
                 let reg_val = reg_read!(emu, i32::from(reg))?;
                 let index = parser.add_value(reg_val as i64);
                 print!("${} => {} = ", index, reg.to_string());
@@ -82,7 +82,7 @@ fn command_print(m: &mut Machine, parser: &mut Parser, params: &Vec<Token>) -> a
     Ok(())
 }
 
-fn command_define(parser: &mut Parser, params: &Vec<Token>) -> anyhow::Result<()> {
+fn command_define(parser: &mut AsmParser, params: &Vec<Token>) -> anyhow::Result<()> {
     if params.len() == 0 {
         for (name, value) in parser.constants() {
             println!("{:20} {:#10x} {:12}", name, value, value);
@@ -91,7 +91,7 @@ fn command_define(parser: &mut Parser, params: &Vec<Token>) -> anyhow::Result<()
     Ok(())
 }
 
-fn command_eval(parser: &mut Parser, params: &Vec<Token>) -> anyhow::Result<()> {
+fn command_eval(parser: &mut AsmParser, params: &Vec<Token>) -> anyhow::Result<()> {
     if params.len() == 1 {
         let value = &params[0];
         match value {
@@ -107,7 +107,7 @@ fn command_eval(parser: &mut Parser, params: &Vec<Token>) -> anyhow::Result<()> 
     Ok(())
 }
 
-fn execute_asm(m: &mut Machine, parser: &mut Parser, line: &str) -> anyhow::Result<()> {
+fn execute_asm(m: &mut Machine, parser: &mut AsmParser, line: &str) -> anyhow::Result<()> {
     let parsed_line = parser.parse_asm(&line)?;
     let code = m.asm(parsed_line.to_string(), 0)?;
     println!("{} : {} {} :{}",
@@ -126,7 +126,7 @@ fn execute_asm(m: &mut Machine, parser: &mut Parser, line: &str) -> anyhow::Resu
     Ok(())
 }
 
-fn run_interactive(m: &mut Machine, parser: &mut Parser) -> anyhow::Result<()> {
+fn run_interactive(m: &mut Machine, parser: &mut AsmParser) -> anyhow::Result<()> {
     m.print_version();
     m.init_cache()?;
     m.print_register()?;
@@ -184,7 +184,7 @@ fn run_interactive(m: &mut Machine, parser: &mut Parser) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_batch(m: &mut Machine, parser: &Parser, inst_vec: Vec<String>) -> anyhow::Result<()> {
+fn run_batch(m: &mut Machine, parser: &mut AsmParser, inst_vec: Vec<String>) -> anyhow::Result<()> {
     for inst in inst_vec {
         let inst = parser.parse_asm(&inst)?;
         let code = m.asm(inst.to_string(), 0)?;
@@ -227,7 +227,7 @@ fn run(options: &Options) -> anyhow::Result<()> {
         _ => CpuContext::new().arch(options.arch).build(),
     };
 
-    let mut machine = Machine::new_from_context(&cpu_context)?;
+    let mut machine = Machine::new_from_context(cpu_context.clone())?;
     if let Some(ticks) = options.ticks {
         match options.arch {
             CpuArch::X86_32 => x86_32::set_clock_mode(ClockMode::Fixed((ticks,0))), 
@@ -235,7 +235,7 @@ fn run(options: &Options) -> anyhow::Result<()> {
         };
     }
 
-    let mut parser = Parser::new();
+    let mut parser = AsmParser::new();
 
     if let Some(inst_str) = &options.batch {
         let inst_vec = inst_str.split(';')
@@ -257,6 +257,6 @@ fn run(options: &Options) -> anyhow::Result<()> {
 }
 
 fn main() {
-    let options = Options::from_args();
+    let options = Options::parse();
     ok_or_error!(run(&options));
 }

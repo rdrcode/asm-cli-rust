@@ -2,7 +2,7 @@ use ansi_term::Colour::{Blue, Yellow};
 use keystone::AsmResult;
 use std::convert::TryFrom;
 use capstone::prelude::*;
-use unicorn::unicorn_const::{Arch, Mode, Permission};
+use unicorn_engine::unicorn_const::{Arch, Mode, Permission};
 use keystone::*;
 use anyhow::Result;
 use thiserror::Error;
@@ -35,15 +35,15 @@ pub enum ExecutionError {
     KeystoneError,
 }
 
-pub struct Machine {
+pub struct Machine<'a> {
     pub keystone: keystone::Keystone,
     pub capstone: Capstone,
-    pub unicorn: unicorn::Unicorn,
+    pub unicorn: unicorn_engine::Unicorn<'a, ()>,
     pub word_size: usize,
     pub regs_values: IndexMap<Register, u64>,
-    pub sp: unicorn::RegisterX86,
-    pub ip: unicorn::RegisterX86,
-    pub flags: unicorn::RegisterX86,
+    pub sp: unicorn_engine::RegisterX86,
+    pub ip: unicorn_engine::RegisterX86,
+    pub flags: unicorn_engine::RegisterX86,
     pub previous_inst_addr: Vec<u64>,
     pub code_addr: u64,
     pub code_size: u64,
@@ -54,9 +54,9 @@ pub struct Machine {
     pub printer: Printer,
 }
 
-impl Machine {
+impl<'a> Machine<'a> {
 
-    pub fn new(arch: CpuArch) -> Result<Machine> {
+    pub fn new(arch: CpuArch) -> Result<Machine<'static>> {
         let cpu_context = match arch {
             CpuArch::X86_32 => CpuContext::new()
                                 .arch(CpuArch::X86_32)
@@ -70,13 +70,13 @@ impl Machine {
                                 .stack_segment(x86_64::STACK_ADDR, x86_64::STACK_SIZE),
         }.build();
     
-        Machine::new_from_context(&cpu_context)
+        Machine::new_from_context(cpu_context)
     }
 
-    pub fn new_from_context(cpu_context: &CpuContext) -> Result<Machine> {
+    pub fn new_from_context(cpu_context: CpuContext) -> Result<Machine<'static>> {
         let mut unicorn = Machine::unicorn_engine(cpu_context.arch)?;
     
-        let mut cpu = unicorn.borrow();
+        let cpu = &mut unicorn;
     
         // map and load memory
         mem_map!(cpu, cpu_context.code_addr, usize::try_from(cpu_context.code_size).unwrap(), Permission::ALL)?;
@@ -94,7 +94,7 @@ impl Machine {
                         .context(format!("Failure to add interrupt hook: {:?}", err))
                     )?;
         
-                cpu.add_insn_sys_hook(unicorn::InsnSysX86::SYSCALL,
+                cpu.add_insn_sys_hook(unicorn_engine::InsnSysX86::SYSCALL,
                                     cpu_context.code_addr,
                                     cpu_context.code_addr+cpu_context.code_size-1,
                                     x86_32::hook_syscall)
@@ -108,7 +108,7 @@ impl Machine {
                         .context(format!("Failure to add interrupt hook: {:?}", err))
                     )?;
         
-                cpu.add_insn_sys_hook(unicorn::InsnSysX86::SYSCALL,
+                cpu.add_insn_sys_hook(unicorn_engine::InsnSysX86::SYSCALL,
                                     cpu_context.code_addr,
                                     cpu_context.code_addr+cpu_context.code_size-1,
                                     x86_64::hook_syscall)
@@ -132,7 +132,7 @@ impl Machine {
             reg_write!(cpu, *reg, *val)?;
         }
     
-        reg_write!(cpu, unicorn::RegisterX86::EIP as i32, cpu_context.code_addr)?;
+        reg_write!(cpu, unicorn_engine::RegisterX86::EIP as i32, cpu_context.code_addr)?;
     
         Ok(Machine {
             keystone: Machine::keystone_engine(cpu_context.arch)?,
@@ -140,9 +140,9 @@ impl Machine {
             unicorn,
             word_size,
             regs_values,
-            sp: unicorn::RegisterX86::ESP,
-            ip: unicorn::RegisterX86::EIP,
-            flags: unicorn::RegisterX86::EFLAGS,
+            sp: unicorn_engine::RegisterX86::ESP,
+            ip: unicorn_engine::RegisterX86::EIP,
+            flags: unicorn_engine::RegisterX86::EFLAGS,
             previous_inst_addr: vec![cpu_context.code_addr],
             code_addr: cpu_context.code_addr,
             code_size: cpu_context.code_size,
@@ -163,7 +163,7 @@ impl Machine {
     }
 
     pub fn print_register(&mut self) -> Result<()> {
-        let emu = self.unicorn.borrow();
+        let emu = &mut self.unicorn;
         println!(
             "{}",
             Yellow.paint(format!("{:-^1$}", " cpu context ", 4*(self.word_size*2+8)+3))
@@ -202,14 +202,14 @@ impl Machine {
     }
 
     pub fn execute_instruction(&mut self, byte_arr: Vec<u8>) -> Result<u64> {
-        let mut emu = self.unicorn.borrow();
+        let emu = &mut self.unicorn;
         let reg_ip = self.ip as i32;
         let cur_ip_val = reg_read!(emu, reg_ip)?;
         mem_write!(emu, cur_ip_val, &byte_arr)?;
         emu_start!(emu,
             cur_ip_val,
             cur_ip_val + u64::try_from(byte_arr.len()).unwrap(),
-            10 * unicorn::unicorn_const::SECOND_SCALE,
+            10 * unicorn_engine::unicorn_const::SECOND_SCALE,
             1000
         )?;
 
@@ -220,7 +220,7 @@ impl Machine {
     }
 
     pub fn print_code(&mut self) -> Result<()> {
-        let emu = self.unicorn.borrow();
+        let emu = &mut self.unicorn;
         println!(
             "{}",
             Yellow.paint(format!("{:-^1$}", " code segment ", 4*(self.word_size*2+8)+3))
@@ -255,7 +255,7 @@ impl Machine {
     }
 
     pub fn init_cache(&mut self) -> Result<()> {
-        let emu = self.unicorn.borrow();
+        let emu = &mut self.unicorn;
         let mem_data = mem_read_as_vec!(emu, self.data_addr as u64, 5 * 16)?;
 
         self.printer.display_offset(self.data_addr);
@@ -265,7 +265,7 @@ impl Machine {
     }
 
     pub fn print_data(&mut self) -> Result<()> {
-        let emu = self.unicorn.borrow();
+        let emu = &mut self.unicorn;
         //println!(
         //    "{}",
         //    Yellow.paint(format!("{:-^1$}", " data segment ", 4*(self.word_size*2+8)+3))
@@ -281,7 +281,7 @@ impl Machine {
     }
 
     pub fn print_stack(&mut self) -> Result<()> {
-        let emu = self.unicorn.borrow();
+        let emu = &mut self.unicorn;
         //println!(
         //    "{}",
         //    Yellow.paint(format!("{:-^1$}", " stack segment ", 4*(self.word_size*2+8)+3))
@@ -298,7 +298,7 @@ impl Machine {
     }
 
     pub fn print_flags(&mut self) -> Result<()> {
-        let emu = self.unicorn.borrow();
+        let emu = &mut self.unicorn;
         let flag_bits = vec![
             ('C', 0),
             ('P', 2),
@@ -328,10 +328,10 @@ impl Machine {
         Ok(())
     }
 
-    fn unicorn_engine(arch: CpuArch) -> Result<unicorn::Unicorn> {
+    fn unicorn_engine(arch: CpuArch) -> Result<unicorn_engine::Unicorn<'static, ()>> {
         let engine = match arch {
-            CpuArch::X86_32 => unicorn::Unicorn::new(Arch::X86, Mode::MODE_32),
-            CpuArch::X86_64 => unicorn::Unicorn::new(Arch::X86, Mode::MODE_64),
+            CpuArch::X86_32 => unicorn_engine::Unicorn::new(Arch::X86, Mode::MODE_32),
+            CpuArch::X86_64 => unicorn_engine::Unicorn::new(Arch::X86, Mode::MODE_64),
         }.map_err(|err| anyhow::Error::new(ExecutionError::UnicornError)
             .context(format!("Failure to create new unicorn engine instance: {:?}", err))
         )?;

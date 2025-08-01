@@ -4,19 +4,19 @@ use std::time::SystemTime;
 use std::collections::HashSet;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
-use clap::arg_enum;
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize, Serializer};
 use serde::de::{Deserializer, Visitor};
 use maplit::hashset;
 use indexmap::{IndexMap,indexmap};
 
 
-arg_enum!{
-    #[derive(Copy,Clone,Deserialize,Serialize,PartialEq,Eq,Hash,Debug)]
-    pub enum CpuArch {
-        X86_32,
-        X86_64,
-    }
+#[derive(Copy,Clone,Deserialize,Serialize,PartialEq,Eq,Hash,Debug,ValueEnum)]
+pub enum CpuArch {
+    #[value(name = "x86-32")]
+    X86_32,
+    #[value(name = "x86-64")]
+    X86_64,
 }
 
 impl Default for CpuArch {
@@ -92,7 +92,7 @@ pub fn regs(arch: CpuArch) -> Vec<Register> {
 }
 
 #[derive(Copy,Clone)]
-pub struct Register(pub unicorn::RegisterX86, pub usize);
+pub struct Register(pub unicorn_engine::RegisterX86, pub usize);
 
 impl Register {
     pub fn id(&self) -> i32 {
@@ -112,7 +112,7 @@ impl From<Register> for i32 {
 
 impl From<&str> for Register {
     fn from(s: &str) -> Self {
-        let mut result = Register{0: unicorn::RegisterX86::INVALID, 1: 0};
+        let mut result = Register{0: unicorn_engine::RegisterX86::INVALID, 1: 0};
         for reg in all_regs() {
             if reg.to_string() == s.to_uppercase() {
                 result = reg;
@@ -246,45 +246,45 @@ pub mod x86_32 {
     pub const WORD_SIZE:   usize = 4;
     pub const LINUX_SYSCALL: u32 = 0x80;
 
-    pub const AL: Register  =  Register{0: unicorn::RegisterX86::AL, 1: 1};
-    pub const AH: Register  =  Register{0: unicorn::RegisterX86::AH, 1: 1};
-    pub const AX: Register  =  Register{0: unicorn::RegisterX86::AX, 1: 2};
-    pub const BL: Register  =  Register{0: unicorn::RegisterX86::BL, 1: 1};
-    pub const BH: Register  =  Register{0: unicorn::RegisterX86::BH, 1: 1};
-    pub const BX: Register  =  Register{0: unicorn::RegisterX86::BX, 1: 2};
-    pub const CL: Register  =  Register{0: unicorn::RegisterX86::CL, 1: 1};
-    pub const CH: Register  =  Register{0: unicorn::RegisterX86::CH, 1: 1};
-    pub const CX: Register  =  Register{0: unicorn::RegisterX86::CX, 1: 2};
-    pub const DL: Register  =  Register{0: unicorn::RegisterX86::DL, 1: 1};
-    pub const DH: Register  =  Register{0: unicorn::RegisterX86::DH, 1: 1};
-    pub const DX: Register  =  Register{0: unicorn::RegisterX86::DX, 1: 2};
-    pub const SI: Register  =  Register{0: unicorn::RegisterX86::SI, 1: 2};
-    pub const SIL: Register =  Register{0: unicorn::RegisterX86::SIL, 1: 1};
-    pub const DI: Register  =  Register{0: unicorn::RegisterX86::DI, 1: 2};
-    pub const DIL: Register =  Register{0: unicorn::RegisterX86::DIL, 1: 1};
-    pub const BP: Register  =  Register{0: unicorn::RegisterX86::BP, 1: 2};
-    pub const BPL: Register =  Register{0: unicorn::RegisterX86::BPL, 1: 1};
-    pub const SP: Register  =  Register{0: unicorn::RegisterX86::SP, 1: 2};
-    pub const SPL: Register =  Register{0: unicorn::RegisterX86::SPL, 1: 1};
+    pub const AL: Register  =  Register{0: unicorn_engine::RegisterX86::AL, 1: 1};
+    pub const AH: Register  =  Register{0: unicorn_engine::RegisterX86::AH, 1: 1};
+    pub const AX: Register  =  Register{0: unicorn_engine::RegisterX86::AX, 1: 2};
+    pub const BL: Register  =  Register{0: unicorn_engine::RegisterX86::BL, 1: 1};
+    pub const BH: Register  =  Register{0: unicorn_engine::RegisterX86::BH, 1: 1};
+    pub const BX: Register  =  Register{0: unicorn_engine::RegisterX86::BX, 1: 2};
+    pub const CL: Register  =  Register{0: unicorn_engine::RegisterX86::CL, 1: 1};
+    pub const CH: Register  =  Register{0: unicorn_engine::RegisterX86::CH, 1: 1};
+    pub const CX: Register  =  Register{0: unicorn_engine::RegisterX86::CX, 1: 2};
+    pub const DL: Register  =  Register{0: unicorn_engine::RegisterX86::DL, 1: 1};
+    pub const DH: Register  =  Register{0: unicorn_engine::RegisterX86::DH, 1: 1};
+    pub const DX: Register  =  Register{0: unicorn_engine::RegisterX86::DX, 1: 2};
+    pub const SI: Register  =  Register{0: unicorn_engine::RegisterX86::SI, 1: 2};
+    pub const SIL: Register =  Register{0: unicorn_engine::RegisterX86::SIL, 1: 1};
+    pub const DI: Register  =  Register{0: unicorn_engine::RegisterX86::DI, 1: 2};
+    pub const DIL: Register =  Register{0: unicorn_engine::RegisterX86::DIL, 1: 1};
+    pub const BP: Register  =  Register{0: unicorn_engine::RegisterX86::BP, 1: 2};
+    pub const BPL: Register =  Register{0: unicorn_engine::RegisterX86::BPL, 1: 1};
+    pub const SP: Register  =  Register{0: unicorn_engine::RegisterX86::SP, 1: 2};
+    pub const SPL: Register =  Register{0: unicorn_engine::RegisterX86::SPL, 1: 1};
 
-    pub const CS: Register  =  Register{0: unicorn::RegisterX86::CS, 1: 2};
-    pub const SS: Register  =  Register{0: unicorn::RegisterX86::SS, 1: 2};
-    pub const DS: Register  =  Register{0: unicorn::RegisterX86::DS, 1: 2};
-    pub const ES: Register  =  Register{0: unicorn::RegisterX86::ES, 1: 2};
-    pub const FS: Register  =  Register{0: unicorn::RegisterX86::FS, 1: 2};
-    pub const GS: Register  =  Register{0: unicorn::RegisterX86::GS, 1: 2};
+    pub const CS: Register  =  Register{0: unicorn_engine::RegisterX86::CS, 1: 2};
+    pub const SS: Register  =  Register{0: unicorn_engine::RegisterX86::SS, 1: 2};
+    pub const DS: Register  =  Register{0: unicorn_engine::RegisterX86::DS, 1: 2};
+    pub const ES: Register  =  Register{0: unicorn_engine::RegisterX86::ES, 1: 2};
+    pub const FS: Register  =  Register{0: unicorn_engine::RegisterX86::FS, 1: 2};
+    pub const GS: Register  =  Register{0: unicorn_engine::RegisterX86::GS, 1: 2};
 
-    pub const EFLAGS: Register  =  Register{0: unicorn::RegisterX86::EFLAGS, 1: 4};
+    pub const EFLAGS: Register  =  Register{0: unicorn_engine::RegisterX86::EFLAGS, 1: 4};
 
-    pub const EAX: Register =  Register{0: unicorn::RegisterX86::EAX, 1: 4};
-    pub const EBX: Register =  Register{0: unicorn::RegisterX86::EBX, 1: 4};
-    pub const ECX: Register =  Register{0: unicorn::RegisterX86::ECX, 1: 4};
-    pub const EDX: Register =  Register{0: unicorn::RegisterX86::EDX, 1: 4};
-    pub const EIP: Register =  Register{0: unicorn::RegisterX86::EIP, 1: 4};
-    pub const EBP: Register =  Register{0: unicorn::RegisterX86::EBP, 1: 4};
-    pub const ESP: Register =  Register{0: unicorn::RegisterX86::ESP, 1: 4};
-    pub const EDI: Register =  Register{0: unicorn::RegisterX86::EDI, 1: 4};
-    pub const ESI: Register =  Register{0: unicorn::RegisterX86::ESI, 1: 4};
+    pub const EAX: Register =  Register{0: unicorn_engine::RegisterX86::EAX, 1: 4};
+    pub const EBX: Register =  Register{0: unicorn_engine::RegisterX86::EBX, 1: 4};
+    pub const ECX: Register =  Register{0: unicorn_engine::RegisterX86::ECX, 1: 4};
+    pub const EDX: Register =  Register{0: unicorn_engine::RegisterX86::EDX, 1: 4};
+    pub const EIP: Register =  Register{0: unicorn_engine::RegisterX86::EIP, 1: 4};
+    pub const EBP: Register =  Register{0: unicorn_engine::RegisterX86::EBP, 1: 4};
+    pub const ESP: Register =  Register{0: unicorn_engine::RegisterX86::ESP, 1: 4};
+    pub const EDI: Register =  Register{0: unicorn_engine::RegisterX86::EDI, 1: 4};
+    pub const ESI: Register =  Register{0: unicorn_engine::RegisterX86::ESI, 1: 4};
 
     #[derive(FromPrimitive,ToPrimitive)]
     enum Syscall {
@@ -326,35 +326,35 @@ pub mod x86_32 {
         })
     }
 
-    pub fn hook_syscall(engine: unicorn::UnicornHandle) -> () {
-        let reg_eip = reg_read!(engine, unicorn::RegisterX86::EIP as i32).unwrap_or(0);
-        let reg_eax = reg_read!(engine, unicorn::RegisterX86::EAX as i32).unwrap_or(0);
+    pub fn hook_syscall(engine: &mut unicorn_engine::Unicorn<'_, ()>) -> () {
+        let reg_eip = reg_read!(engine, unicorn_engine::RegisterX86::EIP as i32).unwrap_or(0);
+        let reg_eax = reg_read!(engine, unicorn_engine::RegisterX86::EAX as i32).unwrap_or(0);
         println!("SYSCALL: #{:#04x} @ {:#010x}", reg_eax, reg_eip);
 
         ()
     }
         
-    pub fn hook_intr(mut engine: unicorn::UnicornHandle, intno: u32) -> () {
-        let reg_eip = reg_read!(engine, unicorn::RegisterX86::EIP as i32).unwrap_or(0);
-        let reg_eax = reg_read!(engine, unicorn::RegisterX86::EAX as i32).unwrap_or(0);
+    pub fn hook_intr(engine: &mut unicorn_engine::Unicorn<'_, ()>, intno: u32) -> () {
+        let reg_eip = reg_read!(engine, unicorn_engine::RegisterX86::EIP as i32).unwrap_or(0);
+        let reg_eax = reg_read!(engine, unicorn_engine::RegisterX86::EAX as i32).unwrap_or(0);
         println!("INTERRUPT: #{:#04x} '{}' @ {:#010x}",
                 intno, InterruptX86{id: intno}, reg_eip);
 
         if intno == LINUX_SYSCALL {
-            let reg_ebx = reg_read!(engine, unicorn::RegisterX86::EBX as i32).unwrap_or(0);
+            let reg_ebx = reg_read!(engine, unicorn_engine::RegisterX86::EBX as i32).unwrap_or(0);
             match Syscall::from_u64(reg_eax).unwrap_or(Syscall::Unknown) {
                 Syscall::Write => {
-                    let reg_ecx = reg_read!(engine, unicorn::RegisterX86::ECX as i32).unwrap_or(0);
-                    let reg_edx = reg_read!(engine, unicorn::RegisterX86::EDX as i32).unwrap_or(0);
+                    let reg_ecx = reg_read!(engine, unicorn_engine::RegisterX86::ECX as i32).unwrap_or(0);
+                    let reg_edx = reg_read!(engine, unicorn_engine::RegisterX86::EDX as i32).unwrap_or(0);
                     if reg_ecx != 0 && reg_edx != 0 {
                         let mem_data = mem_read_as_vec!(engine, reg_ecx, usize::try_from(reg_edx).unwrap_or(0)).unwrap_or(vec![]);
                         println!("SYS_WRITE: fd={}, @0x{:08x}: '{}', size = {}", reg_ebx, reg_ecx, String::from_utf8_lossy(&mem_data), reg_edx);
                     }
-                    let _ = reg_write!(engine, unicorn::RegisterX86::EAX as i32, reg_edx);
+                    let _ = reg_write!(engine, unicorn_engine::RegisterX86::EAX as i32, reg_edx);
                 },
                 Syscall::Time => {
                     let (secs,_) = get_time();
-                    let _ = reg_write!(engine, unicorn::RegisterX86::EAX as i32, u64::try_from(secs).unwrap_or(0));
+                    let _ = reg_write!(engine, unicorn_engine::RegisterX86::EAX as i32, u64::try_from(secs).unwrap_or(0));
                     if reg_ebx != 0 {
                         let bytes = (secs as u32).to_le_bytes();
                         let _ = mem_write!(engine, reg_ebx, &bytes);
@@ -374,7 +374,7 @@ pub mod x86_32 {
                         let bytes = [(secs as u32).to_le_bytes(), (subsecs as u32).to_le_bytes()].concat();
                         error |= mem_write!(engine, reg_ebx, &bytes).is_err();
                     }
-                    let reg_ecx = reg_read!(engine, unicorn::RegisterX86::ECX as i32).unwrap_or(0);
+                    let reg_ecx = reg_read!(engine, unicorn_engine::RegisterX86::ECX as i32).unwrap_or(0);
                     if reg_ecx != 0 {
                         let tz_offset_min: i32 = Local.timestamp(0, 0).offset().fix().local_minus_utc()/60;
                         let dst: u32 = 0;
@@ -382,7 +382,7 @@ pub mod x86_32 {
                         error |= mem_write!(engine, reg_ecx, &bytes).is_err();
                     }
                     let _ = reg_write!(engine,
-                        unicorn::RegisterX86::EAX as i32,
+                        unicorn_engine::RegisterX86::EAX as i32,
                         match error {true => u64::MAX, false => 0}
                     );
                 },
@@ -421,23 +421,23 @@ pub mod x86_64 {
     pub const STACK_TOP:     u64 = STACK_ADDR + STACK_SIZE;
     pub const WORD_SIZE:   usize = 8;
 
-    pub const RAX: Register =  Register{0: unicorn::RegisterX86::RAX, 1: 8};
-    pub const RBX: Register =  Register{0: unicorn::RegisterX86::RBX, 1: 8};
-    pub const RCX: Register =  Register{0: unicorn::RegisterX86::RCX, 1: 8};
-    pub const RDX: Register =  Register{0: unicorn::RegisterX86::RDX, 1: 8};
-    pub const RIP: Register =  Register{0: unicorn::RegisterX86::RIP, 1: 8};
-    pub const RBP: Register =  Register{0: unicorn::RegisterX86::RBP, 1: 8};
-    pub const RSP: Register =  Register{0: unicorn::RegisterX86::RSP, 1: 8};
-    pub const RDI: Register =  Register{0: unicorn::RegisterX86::RDI, 1: 8};
-    pub const RSI: Register =  Register{0: unicorn::RegisterX86::RSI, 1: 8};
-    pub const R8: Register  =  Register{0: unicorn::RegisterX86::R8, 1: 8};
-    pub const R9: Register  =  Register{0: unicorn::RegisterX86::R9, 1: 8};
-    pub const R10: Register =  Register{0: unicorn::RegisterX86::R10, 1: 8};
-    pub const R11: Register =  Register{0: unicorn::RegisterX86::R11, 1: 8};
-    pub const R12: Register =  Register{0: unicorn::RegisterX86::R12, 1: 8};
-    pub const R13: Register =  Register{0: unicorn::RegisterX86::R13, 1: 8};
-    pub const R14: Register =  Register{0: unicorn::RegisterX86::R14, 1: 8};
-    pub const R15: Register =  Register{0: unicorn::RegisterX86::R15, 1: 8};
+    pub const RAX: Register =  Register{0: unicorn_engine::RegisterX86::RAX, 1: 8};
+    pub const RBX: Register =  Register{0: unicorn_engine::RegisterX86::RBX, 1: 8};
+    pub const RCX: Register =  Register{0: unicorn_engine::RegisterX86::RCX, 1: 8};
+    pub const RDX: Register =  Register{0: unicorn_engine::RegisterX86::RDX, 1: 8};
+    pub const RIP: Register =  Register{0: unicorn_engine::RegisterX86::RIP, 1: 8};
+    pub const RBP: Register =  Register{0: unicorn_engine::RegisterX86::RBP, 1: 8};
+    pub const RSP: Register =  Register{0: unicorn_engine::RegisterX86::RSP, 1: 8};
+    pub const RDI: Register =  Register{0: unicorn_engine::RegisterX86::RDI, 1: 8};
+    pub const RSI: Register =  Register{0: unicorn_engine::RegisterX86::RSI, 1: 8};
+    pub const R8: Register  =  Register{0: unicorn_engine::RegisterX86::R8, 1: 8};
+    pub const R9: Register  =  Register{0: unicorn_engine::RegisterX86::R9, 1: 8};
+    pub const R10: Register =  Register{0: unicorn_engine::RegisterX86::R10, 1: 8};
+    pub const R11: Register =  Register{0: unicorn_engine::RegisterX86::R11, 1: 8};
+    pub const R12: Register =  Register{0: unicorn_engine::RegisterX86::R12, 1: 8};
+    pub const R13: Register =  Register{0: unicorn_engine::RegisterX86::R13, 1: 8};
+    pub const R14: Register =  Register{0: unicorn_engine::RegisterX86::R14, 1: 8};
+    pub const R15: Register =  Register{0: unicorn_engine::RegisterX86::R15, 1: 8};
 
     #[derive(FromPrimitive,ToPrimitive)]
     enum Syscall {
@@ -479,23 +479,23 @@ pub mod x86_64 {
         })
     }
 
-    pub fn hook_syscall(mut engine: unicorn::UnicornHandle) -> () {
-        let reg_rip = reg_read!(engine, unicorn::RegisterX86::RIP as i32).unwrap();
-        let reg_rax = reg_read!(engine, unicorn::RegisterX86::RAX as i32).unwrap();
+    pub fn hook_syscall(engine: &mut unicorn_engine::Unicorn<'_, ()>) -> () {
+        let reg_rip = reg_read!(engine, unicorn_engine::RegisterX86::RIP as i32).unwrap();
+        let reg_rax = reg_read!(engine, unicorn_engine::RegisterX86::RAX as i32).unwrap();
         println!("SYSCALL: #{:#04x} @ {:#010x}", reg_rax, reg_rip);
 
-        let reg_rdi = reg_read!(engine, unicorn::RegisterX86::RDI as i32).unwrap_or(0);
+        let reg_rdi = reg_read!(engine, unicorn_engine::RegisterX86::RDI as i32).unwrap_or(0);
         match Syscall::from_u64(reg_rax).unwrap_or(Syscall::Unknown) {
             Syscall::Write => {
-                let reg_rsi = reg_read!(engine, unicorn::RegisterX86::RSI as i32).unwrap_or(0);
-                let reg_rdx = reg_read!(engine, unicorn::RegisterX86::RDX as i32).unwrap_or(0);
+                let reg_rsi = reg_read!(engine, unicorn_engine::RegisterX86::RSI as i32).unwrap_or(0);
+                let reg_rdx = reg_read!(engine, unicorn_engine::RegisterX86::RDX as i32).unwrap_or(0);
                 if reg_rsi != 0 && reg_rdx != 0 {
                     let mem_data = mem_read_as_vec!(engine, reg_rsi, usize::try_from(reg_rdx).unwrap_or(0)).unwrap_or(vec![]);
                     println!("SYS_WRITE: fd={}, @0x{:08x}: '{}', size = {}", reg_rdi, reg_rsi, String::from_utf8_lossy(&mem_data), reg_rdx);
                 } else {
                     println!("SYS_WRITE: fd={}, @0x{:08x}, size = {}", reg_rdi, reg_rsi, reg_rdx);
                 }
-                let _ = reg_write!(engine, unicorn::RegisterX86::RAX as i32, reg_rdx);
+                let _ = reg_write!(engine, unicorn_engine::RegisterX86::RAX as i32, reg_rdx);
             },
             Syscall::Time => {
                 let (secs,_) = get_time();
@@ -506,7 +506,7 @@ pub mod x86_64 {
                 } else {
                     println!("SYS_TIME: eax = {} (0x{:08x})", secs, secs);
                 }
-                let _ = reg_write!(engine, unicorn::RegisterX86::RAX as i32, u64::try_from(secs).unwrap_or(0));
+                let _ = reg_write!(engine, unicorn_engine::RegisterX86::RAX as i32, u64::try_from(secs).unwrap_or(0));
             },
             Syscall::Exit => {
                 println!("SYS_EXIT: error code {}", reg_rdi);
@@ -519,7 +519,7 @@ pub mod x86_64 {
                     let bytes = [secs.to_le_bytes(), (subsecs as u64).to_le_bytes()].concat();
                     error |= mem_write!(engine, reg_rdi, &bytes).is_err();
                 }
-                let reg_rsi = reg_read!(engine, unicorn::RegisterX86::RSI as i32).unwrap_or(0);
+                let reg_rsi = reg_read!(engine, unicorn_engine::RegisterX86::RSI as i32).unwrap_or(0);
                 if reg_rsi != 0 {
                     let tz_offset_min = (Local.timestamp(0, 0).offset().fix().local_minus_utc()/60) as i64;
                     let dst: u64 = 0;
@@ -527,7 +527,7 @@ pub mod x86_64 {
                     error |= mem_write!(engine, reg_rsi, &bytes).is_err();
                 }
                 let _ = reg_write!(engine,
-                                   unicorn::RegisterX86::RAX as i32,
+                                   unicorn_engine::RegisterX86::RAX as i32,
                                    match error {true => u64::MAX, false => 0}
                 );
             },
@@ -537,9 +537,9 @@ pub mod x86_64 {
         ()
     }
     
-    pub fn hook_intr(engine: unicorn::UnicornHandle, intno: u32) -> () {
-        let reg_rip = reg_read!(engine, unicorn::RegisterX86::RIP as i32).unwrap_or(0);
-        //let reg_rax = reg_read!(engine, unicorn::RegisterX86::RAX as i32).unwrap();
+    pub fn hook_intr(engine: &mut unicorn_engine::Unicorn<'_, ()>, intno: u32) -> () {
+        let reg_rip = reg_read!(engine, unicorn_engine::RegisterX86::RIP as i32).unwrap_or(0);
+        //let reg_rax = reg_read!(engine, unicorn_engine::RegisterX86::RAX as i32).unwrap();
         println!("INTERRUPT: #{:#04x} '{}' @ {:#010x}",
                  intno, InterruptX86{id: intno}, reg_rip);
     
@@ -549,7 +549,7 @@ pub mod x86_64 {
 
 #[cfg(test)]
 mod tests {
-    use unicorn::unicorn_const::{SECOND_SCALE};
+    use unicorn_engine::unicorn_const::{SECOND_SCALE};
     use anyhow::Result;
 
     use super::*;
@@ -624,8 +624,8 @@ mod tests {
     #[test]
     fn test_syscall_write_32() -> Result<()> {
         let cpu_context = CpuContext::new().arch(CpuArch::X86_32).build();
-        let mut machine = Machine::new_from_context(&cpu_context)?;
-        let mut emu = machine.unicorn.borrow();
+        let mut machine = Machine::new_from_context(cpu_context.clone())?;
+        let emu = &mut machine.unicorn;
 
         let x86_code: Vec<u8> = vec![
             0x31, 0xc0,                   // xor eax,eax
@@ -645,7 +645,7 @@ mod tests {
         ];
 
         let s_addr = machine.code_addr;
-        reg_write!(emu, unicorn::RegisterX86::EIP as i32, s_addr)?;
+        reg_write!(emu, unicorn_engine::RegisterX86::EIP as i32, s_addr)?;
         mem_write!(emu, s_addr, &x86_code)?;
         emu_start!(emu, 
             s_addr,
@@ -654,10 +654,10 @@ mod tests {
             1000
         )?;
 
-        let reg_eip = reg_read!(emu, unicorn::RegisterX86::EIP as i32)?;
+        let reg_eip = reg_read!(emu, unicorn_engine::RegisterX86::EIP as i32)?;
         assert_eq!(s_addr+(x86_code.len() as u64), reg_eip);
 
-        let reg_eax = reg_read!(emu, unicorn::RegisterX86::EAX as i32)?;
+        let reg_eax = reg_read!(emu, unicorn_engine::RegisterX86::EAX as i32)?;
         assert_eq!(12, reg_eax);
 
         Ok(())
@@ -666,8 +666,8 @@ mod tests {
     #[test]
     fn test_syscall_write_64() -> Result<()> {
         let cpu_context = CpuContext::new().arch(CpuArch::X86_64).build();
-        let mut machine = Machine::new_from_context(&cpu_context)?;
-        let mut emu = machine.unicorn.borrow();
+        let mut machine = Machine::new_from_context(cpu_context.clone())?;
+        let emu = &mut machine.unicorn;
 
         let x86_code: Vec<u8> = vec![
             0x31, 0xc0,                   // xor eax,eax
@@ -686,7 +686,7 @@ mod tests {
         ];
 
         let s_addr = machine.code_addr;
-        reg_write!(emu, unicorn::RegisterX86::RIP as i32, s_addr)?;
+        reg_write!(emu, unicorn_engine::RegisterX86::RIP as i32, s_addr)?;
         mem_write!(emu, s_addr, &x86_code)?;
         emu_start!(emu, 
             s_addr,
@@ -695,10 +695,10 @@ mod tests {
             1000
         )?;
 
-        let reg_rip = reg_read!(emu, unicorn::RegisterX86::RIP as i32)?;
+        let reg_rip = reg_read!(emu, unicorn_engine::RegisterX86::RIP as i32)?;
         assert_eq!(s_addr+(x86_code.len() as u64), reg_rip);
 
-        let reg_rax = reg_read!(emu, unicorn::RegisterX86::RAX as i32)?;
+        let reg_rax = reg_read!(emu, unicorn_engine::RegisterX86::RAX as i32)?;
         assert_eq!(12, reg_rax);
 
         Ok(())
@@ -707,8 +707,8 @@ mod tests {
     #[test]
     fn test_syscall_exit_32() -> Result<()> {
         let cpu_context = CpuContext::new().arch(CpuArch::X86_32).build();
-        let mut machine = Machine::new_from_context(&cpu_context)?;
-        let mut emu = machine.unicorn.borrow();
+        let mut machine = Machine::new_from_context(cpu_context.clone())?;
+        let emu = &mut machine.unicorn;
 
         let x86_code_1: Vec<u8> = vec![
             0x66, 0xbb, 0x34, 0x12,       // mov bx,0x1234
@@ -732,7 +732,7 @@ mod tests {
         ];
 
         let s_addr = machine.code_addr;
-        reg_write!(emu, unicorn::RegisterX86::EIP as i32, s_addr)?;
+        reg_write!(emu, unicorn_engine::RegisterX86::EIP as i32, s_addr)?;
         mem_write!(emu, s_addr, &x86_code_1)?;
         mem_write!(emu, s_addr+(x86_code_1.len() as u64), &x86_code_2)?;
         emu_start!(emu, 
@@ -742,7 +742,7 @@ mod tests {
             1000
         )?;
 
-        let reg_eip = reg_read!(emu, unicorn::RegisterX86::EIP as i32)?;
+        let reg_eip = reg_read!(emu, unicorn_engine::RegisterX86::EIP as i32)?;
         // EIP points to the instruction after the interrupt instruction,
         // which allocates two bytes
         let int_addr = reg_eip - 2;
@@ -756,8 +756,8 @@ mod tests {
     #[test]
     fn test_syscall_exit_x64() -> Result<()> {
         let cpu_context = CpuContext::new().arch(CpuArch::X86_64).build();
-        let mut machine = Machine::new_from_context(&cpu_context)?;
-        let mut emu = machine.unicorn.borrow();
+        let mut machine = Machine::new_from_context(cpu_context.clone())?;
+        let emu = &mut machine.unicorn;
 
         let x86_code_1: Vec<u8> = vec![
             0x66, 0xbb, 0x34, 0x12,       // mov bx,0x1234
@@ -781,7 +781,7 @@ mod tests {
         ];
 
         let s_addr = machine.code_addr;
-        reg_write!(emu, unicorn::RegisterX86::RIP as i32, s_addr)?;
+        reg_write!(emu, unicorn_engine::RegisterX86::RIP as i32, s_addr)?;
         mem_write!(emu, s_addr, &x86_code_1)?;
         mem_write!(emu, s_addr+(x86_code_1.len() as u64), &x86_code_2)?;
         emu_start!(emu, 
@@ -791,7 +791,7 @@ mod tests {
             1000
         )?;
 
-        let reg_rip = reg_read!(emu, unicorn::RegisterX86::RIP as i32)?;
+        let reg_rip = reg_read!(emu, unicorn_engine::RegisterX86::RIP as i32)?;
         // EIP points to the instruction after the syscall instruction,
         // which allocates two bytes
         let int_addr = reg_rip - 2;
@@ -805,8 +805,8 @@ mod tests {
     #[test]
     fn test_syscall_time_x32() -> Result<()> {
         let cpu_context = CpuContext::new().arch(CpuArch::X86_32).build();
-        let mut machine = Machine::new_from_context(&cpu_context)?;
-        let mut emu = machine.unicorn.borrow();
+        let mut machine = Machine::new_from_context(cpu_context.clone())?;
+        let emu = &mut machine.unicorn;
 
         let x86_code: Vec<u8> = vec![
             0xb8, 0x0d, 0x00, 0x00, 0x00, // mov eax,13
@@ -820,7 +820,7 @@ mod tests {
         x86_32::set_clock_mode(ClockMode::Fixed(timeval));
 
         let s_addr = machine.code_addr;
-        reg_write!(emu, unicorn::RegisterX86::EIP as i32, s_addr)?;
+        reg_write!(emu, unicorn_engine::RegisterX86::EIP as i32, s_addr)?;
         mem_write!(emu, s_addr, &x86_code)?;
         emu_start!(emu, 
             s_addr,
@@ -829,17 +829,17 @@ mod tests {
             1000
         )?;
 
-        let reg_eip = reg_read!(emu, unicorn::RegisterX86::EIP as i32)?;
+        let reg_eip = reg_read!(emu, unicorn_engine::RegisterX86::EIP as i32)?;
         assert_eq!(s_addr+(x86_code.len() as u64), reg_eip);
 
-        let reg_eax = reg_read!(emu, unicorn::RegisterX86::EAX as i32)?;
+        let reg_eax = reg_read!(emu, unicorn_engine::RegisterX86::EAX as i32)?;
         assert_eq!(timeval.0, reg_eax as i64);
 
         let addr = machine.data_addr;
         let mem_data = mem_read_as_vec!(emu, addr, 4)?;
         assert_eq!((timeval.0 as u32).to_le_bytes(), &mem_data[..]);
 
-        let reg_ebx = reg_read!(emu, unicorn::RegisterX86::EBX as i32)?;
+        let reg_ebx = reg_read!(emu, unicorn_engine::RegisterX86::EBX as i32)?;
         assert_eq!(timeval.0 as u64, reg_ebx);
 
         Ok(())
@@ -848,8 +848,8 @@ mod tests {
     #[test]
     fn test_syscall_time_x64() -> Result<()> {
         let cpu_context = CpuContext::new().arch(CpuArch::X86_64).build();
-        let mut machine = Machine::new_from_context(&cpu_context)?;
-        let mut emu = machine.unicorn.borrow();
+        let mut machine = Machine::new_from_context(cpu_context.clone())?;
+        let emu = &mut machine.unicorn;
 
         let x86_code: Vec<u8> = vec![
             0xb8, 0xc9, 0x00, 0x00, 0x00, // mov eax,201
@@ -862,7 +862,7 @@ mod tests {
         x86_64::set_clock_mode(ClockMode::Fixed(timeval));
 
         let s_addr = machine.code_addr;
-        reg_write!(emu, unicorn::RegisterX86::RIP as i32, s_addr)?;
+        reg_write!(emu, unicorn_engine::RegisterX86::RIP as i32, s_addr)?;
         mem_write!(emu, s_addr, &x86_code)?;
         emu_start!(emu, 
             s_addr,
@@ -871,17 +871,17 @@ mod tests {
             1000
         )?;
 
-        let reg_rip = reg_read!(emu, unicorn::RegisterX86::RIP as i32)?;
+        let reg_rip = reg_read!(emu, unicorn_engine::RegisterX86::RIP as i32)?;
         assert_eq!(s_addr+(x86_code.len() as u64), reg_rip);
 
-        let reg_rax = reg_read!(emu, unicorn::RegisterX86::RAX as i32)?;
+        let reg_rax = reg_read!(emu, unicorn_engine::RegisterX86::RAX as i32)?;
         assert_eq!(timeval.0, reg_rax as i64);
 
         let addr = machine.data_addr;
         let mem_data = mem_read_as_vec!(emu, addr, 8)?;
         assert_eq!(timeval.0.to_le_bytes(), &mem_data[..]);
 
-        let reg_rbx = reg_read!(emu, unicorn::RegisterX86::RBX as i32)?;
+        let reg_rbx = reg_read!(emu, unicorn_engine::RegisterX86::RBX as i32)?;
         assert_eq!(timeval.0 as u64, reg_rbx);
 
         Ok(())
@@ -890,8 +890,8 @@ mod tests {
     #[test]
     fn test_syscall_gettimeofday_x32() -> Result<()> {
         let cpu_context = CpuContext::new().arch(CpuArch::X86_32).build();
-        let mut machine = Machine::new_from_context(&cpu_context)?;
-        let mut emu = machine.unicorn.borrow();
+        let mut machine = Machine::new_from_context(cpu_context.clone())?;
+        let emu = &mut machine.unicorn;
 
         let x86_code: Vec<u8> = vec![
             0xb8, 0x4e, 0x00, 0x00, 0x00, // mov eax,78
@@ -908,7 +908,7 @@ mod tests {
         x86_32::set_clock_mode(ClockMode::Fixed(timeval));
 
         let s_addr = machine.code_addr;
-        reg_write!(emu, unicorn::RegisterX86::EIP as i32, s_addr)?;
+        reg_write!(emu, unicorn_engine::RegisterX86::EIP as i32, s_addr)?;
         mem_write!(emu, s_addr, &x86_code)?;
         emu_start!(emu, 
             s_addr,
@@ -917,13 +917,13 @@ mod tests {
             1000
         )?;
 
-        let reg_eip = reg_read!(emu, unicorn::RegisterX86::EIP as i32)?;
+        let reg_eip = reg_read!(emu, unicorn_engine::RegisterX86::EIP as i32)?;
         assert_eq!(s_addr+(x86_code.len() as u64), reg_eip);
 
-        let reg_eax = reg_read!(emu, unicorn::RegisterX86::EAX as i32)?;
+        let reg_eax = reg_read!(emu, unicorn_engine::RegisterX86::EAX as i32)?;
         assert_eq!(timeval.0, reg_eax as i64);
 
-        let reg_ebx = reg_read!(emu, unicorn::RegisterX86::EBX as i32)?;
+        let reg_ebx = reg_read!(emu, unicorn_engine::RegisterX86::EBX as i32)?;
         assert_eq!(timeval.1 as u64, reg_ebx);
 
         Ok(())
@@ -932,8 +932,8 @@ mod tests {
     #[test]
     fn test_syscall_gettimeofday_x64() -> Result<()> {
         let cpu_context = CpuContext::new().arch(CpuArch::X86_64).build();
-        let mut machine = Machine::new_from_context(&cpu_context)?;
-        let mut emu = machine.unicorn.borrow();
+        let mut machine = Machine::new_from_context(cpu_context.clone())?;
+        let emu = &mut machine.unicorn;
 
         let x86_code: Vec<u8> = vec![
             0xb8, 0x60, 0x00, 0x00, 0x00, // mov eax,96
@@ -949,7 +949,7 @@ mod tests {
         x86_64::set_clock_mode(ClockMode::Fixed(timeval));
 
         let s_addr = machine.code_addr;
-        reg_write!(emu, unicorn::RegisterX86::RIP as i32, s_addr)?;
+        reg_write!(emu, unicorn_engine::RegisterX86::RIP as i32, s_addr)?;
         mem_write!(emu, s_addr, &x86_code)?;
         emu_start!(emu, 
             s_addr,
@@ -958,13 +958,13 @@ mod tests {
             1000
         )?;
 
-        let reg_rip = reg_read!(emu, unicorn::RegisterX86::RIP as i32)?;
+        let reg_rip = reg_read!(emu, unicorn_engine::RegisterX86::RIP as i32)?;
         assert_eq!(s_addr+(x86_code.len() as u64), reg_rip);
 
-        let reg_rax = reg_read!(emu, unicorn::RegisterX86::RAX as i32)?;
+        let reg_rax = reg_read!(emu, unicorn_engine::RegisterX86::RAX as i32)?;
         assert_eq!(timeval.0, reg_rax as i64);
 
-        let reg_rbx = reg_read!(emu, unicorn::RegisterX86::RBX as i32)?;
+        let reg_rbx = reg_read!(emu, unicorn_engine::RegisterX86::RBX as i32)?;
         assert_eq!(timeval.1 as u64, reg_rbx);
 
         Ok(())

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json;
 use itertools::Itertools;
-use unicorn::unicorn_const::{MemRegion, Permission};
+use unicorn_engine::unicorn_const::{MemRegion, Permission};
 use anyhow::Result;
 
 use super::interface::Machine;
@@ -13,7 +13,7 @@ use super::cpuarch::{CpuArch,Register,x86_32,x86_64};
 use crate::{mem_regions,mem_map,mem_unmap,mem_read_as_vec,mem_write,reg_read,reg_write};
 
 
-#[derive(Deserialize,Serialize,PartialEq,Debug)]
+#[derive(Deserialize,Serialize,PartialEq,Debug,Clone)]
 pub struct CpuContext {
     pub arch:        CpuArch,
     pub code_addr:   u64,
@@ -100,7 +100,7 @@ impl CpuContext {
         Ok(())
     }
 
-    fn read_memory(&mut self, emu: &unicorn::UnicornHandle, addr: u64, size: u64) -> Result<()>{
+    fn read_memory(&mut self, emu: &mut unicorn_engine::Unicorn<'_, ()>, addr: u64, size: u64) -> Result<()>{
         let mem_data = mem_read_as_vec!(emu, addr as u64, usize::try_from(size).unwrap())?;
 
         let mut grouped: Vec<(bool,Vec<u8>)> = Vec::new();
@@ -122,7 +122,7 @@ impl CpuContext {
     }
 
     pub fn save(&mut self, machine: &mut Machine) -> Result<()> {
-        let emu = machine.unicorn.borrow();
+        let emu = &mut machine.unicorn;
 
         for (&reg,val) in self.regs_values.iter_mut() {
             *val = reg_read!(emu,reg)?;
@@ -135,15 +135,15 @@ impl CpuContext {
         self.stack_addr = machine.stack_addr;
         self.stack_size = machine.stack_size;
 
-        self.read_memory(&emu, self.code_addr, self.code_size)?;
-        self.read_memory(&emu, self.data_addr, self.data_size)?;
-        self.read_memory(&emu, self.stack_addr, self.stack_size)?;
+        self.read_memory(emu, self.code_addr, self.code_size)?;
+        self.read_memory(emu, self.data_addr, self.data_size)?;
+        self.read_memory(emu, self.stack_addr, self.stack_size)?;
 
         Ok(())
     }
 
     pub fn restore(&self, machine: &mut Machine) -> Result<()> {
-        let mut emu = machine.unicorn.borrow();
+        let emu = &mut machine.unicorn;
         let mem_regions: Vec<MemRegion> = mem_regions!(emu)?;
         
         for mem_region in mem_regions {
@@ -265,7 +265,7 @@ mod tests {
     use std::io::BufWriter;
     use std::path::Path;
     use std::io::Cursor;
-    use unicorn::unicorn_const::{SECOND_SCALE};
+    use unicorn_engine::unicorn_const::{SECOND_SCALE};
     use maplit::hashmap;
     use anyhow::Result;
 
@@ -386,7 +386,7 @@ mod tests {
     }}";
 
     fn run_code_x32(machine: &mut Machine) -> Result<()> {
-        let mut emu = machine.unicorn.borrow();
+        let emu = &mut machine.unicorn;
 
         let x86_code: Vec<u8> = vec![
             0xb0, 0xff,                // mov al,0xff
@@ -396,7 +396,7 @@ mod tests {
             0x66, 0x89, 0x5f, 0x10,    // mov [edi+16],bx
         ];
 
-        reg_write!(emu, unicorn::RegisterX86::EIP as i32, machine.code_addr)?;
+        reg_write!(emu, unicorn_engine::RegisterX86::EIP as i32, machine.code_addr)?;
         let s_addr = machine.code_addr;
         mem_write!(emu, s_addr, &x86_code)?;
         emu_start!(emu, 
@@ -410,7 +410,7 @@ mod tests {
     }
 
     fn run_code_x64(machine: &mut Machine) -> Result<()> {
-        let mut emu = machine.unicorn.borrow();
+        let emu = &mut machine.unicorn;
 
         let x86_code: Vec<u8> = vec![
             0xb0, 0xff,                // mov al,0xff
@@ -420,7 +420,7 @@ mod tests {
             0x66, 0x89, 0x5f, 0x10,    // mov [rdi+16],bx
         ];
 
-        reg_write!(emu, unicorn::RegisterX86::RIP as i32, machine.code_addr)?;
+        reg_write!(emu, unicorn_engine::RegisterX86::RIP as i32, machine.code_addr)?;
         let s_addr = machine.code_addr;
         mem_write!(emu, s_addr, &x86_code)?;
         emu_start!(emu, 
@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn test_cpu_context_x32() -> Result<()> {
         let mut cpu_context = CpuContext::new().arch(CpuArch::X86_32).build();
-        let mut machine = Machine::new_from_context(&cpu_context)?;
+        let mut machine = Machine::new_from_context(cpu_context.clone())?;
         assert_eq!(run_code_x32(&mut machine).is_ok(), true);
         cpu_context.save(&mut machine)?;
         
@@ -528,7 +528,7 @@ mod tests {
     #[test]
     fn test_cpu_context_x64() -> Result<()> {
         let mut cpu_context = CpuContext::new().arch(CpuArch::X86_64).build();
-        let mut machine = Machine::new_from_context(&cpu_context)?;
+        let mut machine = Machine::new_from_context(cpu_context.clone())?;
         assert_eq!(run_code_x64(&mut machine).is_ok(), true);
         cpu_context.save(&mut machine)?;
         
@@ -636,7 +636,7 @@ mod tests {
     #[test]
     fn test_save_cpu_context_x32() -> Result<()> {
         let mut cpu_context = CpuContext::new().arch(CpuArch::X86_32).build();
-        let mut machine = Machine::new_from_context(&cpu_context).unwrap();
+        let mut machine = Machine::new_from_context(cpu_context.clone()).unwrap();
         assert_eq!(run_code_x64(&mut machine).is_ok(), true);
         cpu_context.save(&mut machine)?;
 
@@ -649,7 +649,7 @@ mod tests {
     #[test]
     fn test_save_cpu_context_x64() -> Result<()> {
         let mut cpu_context = CpuContext::new().arch(CpuArch::X86_64).build();
-        let mut machine = Machine::new_from_context(&cpu_context).unwrap();
+        let mut machine = Machine::new_from_context(cpu_context.clone()).unwrap();
         assert_eq!(run_code_x64(&mut machine).is_ok(), true);
         cpu_context.save(&mut machine)?;
 
